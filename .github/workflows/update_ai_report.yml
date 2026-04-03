@@ -1,0 +1,59 @@
+name: AI Quant Trading Report
+
+on:
+  schedule:
+    # 每週一到五 UTC 09:00 執行（台灣時間 17:00 收盤後）
+    - cron: '0 9 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      tp_pct:
+        description: 'Take Profit 停利 (例如 0.15 = +15%)'
+        required: false
+        default: '0.15'
+      sl_pct:
+        description: 'Stop Loss 停損 (例如 0.08 = -8%)'
+        required: false
+        default: '0.08'
+      hold_days:
+        description: '最大持倉天數'
+        required: false
+        default: '20'
+      tickers:
+        description: '股池 (空格分隔，例如: 2330 2317 2454)'
+        required: false
+        default: '2330 2317 2454 2308 2881 2603 3231 3481 2382 2609 2891 1519 2379 2303'
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install yfinance pandas numpy matplotlib
+
+      - name: Run AI Quant Pipeline
+        run: |
+          TP=${{ github.event.inputs.tp_pct || '0.15' }}
+          SL=${{ github.event.inputs.sl_pct || '0.08' }}
+          HOLD=${{ github.event.inputs.hold_days || '20' }}
+          TICKERS="${{ github.event.inputs.tickers || '2330 2317 2454 2308 2881 2603 3231 3481 2382 2609 2891 1519 2379 2303' }}"
+          python ai_report.py --tp $TP --sl $SL --hold-days $HOLD --tickers $TICKERS
+
+      - name: Commit and force push (no history)
+        run: |
+          git config --global user.email "voidful.stack@gmail.com"
+          git config --global user.name "Voidful"
+          git checkout --orphan latest
+          git add -A
+          git commit -m "🎯 AI Trading Report Update ($(date -u '+%Y-%m-%d'))" || echo "No changes to commit"
+          git branch -D main
+          git branch -m main
+          git push -f origin main
