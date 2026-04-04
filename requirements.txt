@@ -1,2 +1,5 @@
 yfinance
+pandas
+numpy
 matplotlib
+exchange_calendars

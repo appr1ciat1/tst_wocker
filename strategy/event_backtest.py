@@ -1,10 +1,20 @@
 """
-事件驅動回測引擎 (Event-Driven Backtest Engine)
+事件驅動回測引擎 v2 (Event-Driven Backtest Engine)
 
-支援三種出場機制：
+支援四種出場機制：
 1. 區間停利 (Take Profit, TP) — 盤中最高價觸碰目標價即出場
 2. 絕對停損 (Stop Loss, SL) — 盤中最低價跌破防守價即砍倉
-3. 時間強制出場 (Time Exit) — 持有滿 N 個交易日強制以收盤價平倉
+3. 移動停利 (Trailing Stop) — 從最高點回落超過 ATR 倍數即出場
+4. 時間強制出場 (Time Exit) — 持有滿 N 個交易日強制以收盤價平倉
+
+v2 改進：
+- Entry 改為 t+1 open（對齊實盤信號流程）
+- 支援 Top-K 選股（取代固定 threshold）
+- Position sizing 改為 current equity based（非 initial capital）
+- 支援 ATR-based TP/SL（波動度自適應）
+- 支援 Trailing Stop（移動停利，讓強趨勢自然延伸）
+- 加入台股交易成本模型（手續費 + 證交稅）
+- 停損優先判定保持不變
 
 核心特色：
 - 使用每日 High/Low 進行精確觸價回測（非僅收盤價），貼近實戰
@@ -13,35 +23,104 @@
 """
 
 import pandas as pd
+import numpy as np
 
 
 class EventDrivenBacktester:
     """
-    事件驅動回測器。
+    事件驅動回測器 v2。
 
     Parameters
     ----------
     tp_pct : float
-        停利百分比，例如 0.15 代表 +15%
+        固定模式停利百分比，例如 0.15 代表 +15%
     sl_pct : float
-        停損百分比，例如 0.08 代表 -8%
+        固定模式停損百分比，例如 0.08 代表 -8%
     max_hold_days : int
         最大持倉交易日數
     initial_capital : float
         初始模擬資金
     position_size : float
-        每次進場佔初始資金的比例（例如 0.10 = 10%）
+        每次進場佔當前權益的比例（例如 0.10 = 10%）
+    tp_sl_mode : str
+        'fixed' = 固定百分比 TP/SL, 'atr' = ATR 倍數
+    tp_atr_mult : float
+        ATR 模式下的停利倍數（預設 3.0）
+    sl_atr_mult : float
+        ATR 模式下的停損倍數（預設 1.5）
+    trailing_stop : bool
+        啟用移動停利。啟用時固定 TP 會被停用，改為追蹤最高點回落 sl_atr_mult × ATR 出場。
+    trailing_atr_mult : float
+        移動停利的 ATR 倍數（預設 2.0，從最高點回落此倍數 ATR 即觸發）
+    regime_filter : bool
+        啟用大盤過濾（market_close > 60MA 才允許進場）
+    gap_filter_atr : float
+        跳空過濾（open 偏離 prev_close 超過此倍數 ATR 則跳過），0 = 停用
+    volume_confirm : bool
+        啟用成交量確認（進場日 volume > 20 日均量）
+    blacklist_lookback : int
+        動態黑名單回顧筆數（最近 N 筆交易勝率低於 min_wr 則暫時排除），0 = 停用
+    blacklist_min_wr : float
+        黑名單勝率門檻（預設 0.25 = 25%）
+    buy_cost : float
+        買進手續費率（預設 0.001425 = 0.1425%）
+    sell_cost : float
+        賣出成本率（手續費 + 證交稅，預設 0.004425 = 0.1425% + 0.3%）
     """
 
-    def __init__(self, tp_pct=0.15, sl_pct=0.08, max_hold_days=20,
-                 initial_capital=1_000_000, position_size=0.10):
+    def __init__(self, tp_pct=0.15, sl_pct=0.08, max_hold_days=30,
+                 initial_capital=1_000_000, position_size=0.10,
+                 tp_sl_mode='atr', tp_atr_mult=3.0, sl_atr_mult=2.0,
+                 trailing_stop=False, trailing_atr_mult=2.0,
+                 regime_filter=False, gap_filter_atr=0,
+                 volume_confirm=False,
+                 blacklist_lookback=0, blacklist_min_wr=0.25,
+                 buy_cost=0.001425, sell_cost=0.004425):
         self.tp_pct = tp_pct
         self.sl_pct = sl_pct
         self.max_hold_days = max_hold_days
         self.initial_capital = initial_capital
         self.position_size = position_size
+        self.tp_sl_mode = tp_sl_mode
+        self.tp_atr_mult = tp_atr_mult
+        self.sl_atr_mult = sl_atr_mult
+        self.trailing_stop = trailing_stop
+        self.trailing_atr_mult = trailing_atr_mult
+        self.regime_filter = regime_filter
+        self.gap_filter_atr = gap_filter_atr
+        self.volume_confirm = volume_confirm
+        self.blacklist_lookback = blacklist_lookback
+        self.blacklist_min_wr = blacklist_min_wr
+        self.buy_cost = buy_cost
+        self.sell_cost = sell_cost
 
-    def run(self, total_score, close_df, high_df, low_df, ma_60, threshold=3.2):
+    def _compute_atr(self, high_df, low_df, close_df, period=20):
+        """計算精確的 ATR（True Range 的移動平均）。"""
+        prev_close = close_df.shift(1)
+        tr1 = high_df - low_df
+        tr2 = (high_df - prev_close).abs()
+        tr3 = (low_df - prev_close).abs()
+        true_range = pd.concat([tr1, tr2, tr3]).groupby(level=0).max()
+
+        # 處理 MultiIndex 可能性：直接逐元素取 max
+        true_range = tr1.copy()
+        for idx in true_range.index:
+            for col in true_range.columns:
+                vals = [tr1.at[idx, col], tr2.at[idx, col], tr3.at[idx, col]]
+                vals = [v for v in vals if pd.notna(v)]
+                true_range.at[idx, col] = max(vals) if vals else np.nan
+
+        # 用更高效的方式：element-wise max
+        true_range = np.maximum(np.maximum(tr1, tr2), tr3)
+        if isinstance(true_range, np.ndarray):
+            true_range = pd.DataFrame(true_range, index=high_df.index, columns=high_df.columns)
+
+        atr = true_range.rolling(period).mean()
+        return atr
+
+    def run(self, total_score, close_df, open_df, high_df, low_df, ma_60,
+            top_k=3, threshold=2.0, atr_df=None,
+            market_close=None, vol_df=None):
         """
         執行事件驅動回測。
 
@@ -51,14 +130,24 @@ class EventDrivenBacktester:
             AI 綜合評分矩陣 (日期 x 股票)
         close_df : pd.DataFrame
             收盤價矩陣
+        open_df : pd.DataFrame
+            開盤價矩陣（v2: 用於 t+1 open 進場）
         high_df : pd.DataFrame
             最高價矩陣
         low_df : pd.DataFrame
             最低價矩陣
         ma_60 : pd.DataFrame
             60 日均線矩陣（進場過濾條件）
+        top_k : int
+            每日最多進場股票數（預設 3）
         threshold : float
-            進場信號門檻（score >= threshold 且 close > MA60）
+            安全下限門檻（score < threshold 不進場，預設 2.0）
+        atr_df : pd.DataFrame, optional
+            預計算的 ATR 矩陣（若未提供且 mode='atr'，則內部計算）
+        market_close : pd.Series, optional
+            大盤指數收盤價（0050），用於 regime filter
+        vol_df : pd.DataFrame, optional
+            成交量矩陣，用於 volume confirmation
 
         Returns
         -------
@@ -67,15 +156,54 @@ class EventDrivenBacktester:
         equity_df : pd.DataFrame
             每日資金曲線
         """
-        print(f"💰 執行精準區間回測 (停利 +{self.tp_pct*100:.0f}%, "
-              f"停損 -{self.sl_pct*100:.0f}%, "
-              f"最長持有 {self.max_hold_days} 天)...")
+        mode_desc = f"ATR×{self.tp_atr_mult}/{self.sl_atr_mult}" if self.tp_sl_mode == 'atr' \
+            else f"+{self.tp_pct*100:.0f}%/-{self.sl_pct*100:.0f}%"
+        if self.trailing_stop:
+            mode_desc += f" +Trailing({self.trailing_atr_mult}×ATR)"
+        filters = []
+        if self.regime_filter:
+            filters.append('Regime')
+        if self.gap_filter_atr > 0:
+            filters.append(f'Gap({self.gap_filter_atr}×ATR)')
+        if self.volume_confirm:
+            filters.append('VolConfirm')
+        if self.blacklist_lookback > 0:
+            filters.append(f'Blacklist({self.blacklist_lookback})')
+        filter_desc = f" Filters: {'+'.join(filters)}" if filters else ""
+        cost_desc = f"買 {self.buy_cost*100:.3f}% 賣 {self.sell_cost*100:.3f}%"
+
+        print(f"💰 執行精準區間回測 (TP/SL: {mode_desc}, "
+              f"Top-{top_k}, 最長持有 {self.max_hold_days} 天, "
+              f"成本: {cost_desc}{filter_desc})...")
+
+        # 計算精確 ATR（如果使用 ATR 模式）
+        if self.tp_sl_mode == 'atr':
+            if atr_df is None:
+                atr = self._compute_atr(high_df, low_df, close_df)
+            else:
+                atr = atr_df
+        else:
+            atr = None
+
+        # 大盤 60MA（regime filter）
+        if self.regime_filter and market_close is not None:
+            market_ma60 = market_close.rolling(60).mean()
+        else:
+            market_ma60 = None
+
+        # 成交量 20 日均量
+        if self.volume_confirm and vol_df is not None:
+            vol_ma20 = vol_df.rolling(20).mean()
+        else:
+            vol_ma20 = None
 
         trades = []
         capital = self.initial_capital
         equity_curve = []
         dates = close_df.index
         active_trades = {}  # ticker -> trade_info
+        max_positions = int(1.0 / self.position_size)  # 最多同時持有
+        ticker_history = {}  # ticker -> list of recent Return_Pct (for blacklist)
 
         # 從第 60 天開始（確保技術指標已穩定）
         for i in range(60, len(dates)):
@@ -93,16 +221,35 @@ class EventDrivenBacktester:
                 if pd.isna(current_close):
                     continue
 
+                # 更新移動停利追蹤價（每日盤中最高價）
+                if not pd.isna(current_high):
+                    trade['highest_since_entry'] = max(
+                        trade['highest_since_entry'], current_high
+                    )
+
+                    # 動態調整 trailing stop level
+                    if self.trailing_stop and trade.get('atr_at_entry', 0) > 0:
+                        trailing_sl = (trade['highest_since_entry']
+                                       - trade['atr_at_entry'] * self.trailing_atr_mult)
+                        # trailing SL 只能往上調，不能往下
+                        trade['sl_price'] = max(trade['sl_price'], trailing_sl)
+
                 exit_triggered = False
                 exit_price = 0
                 exit_reason = ""
 
-                # 優先檢查停損（保守回測法，確保風險不被低估）
+                # 優先檢查停損 / trailing stop（保守回測法）
                 if current_low <= trade['sl_price']:
                     exit_triggered = True
                     exit_price = trade['sl_price']
-                    exit_reason = "🔴 停損"
-                elif current_high >= trade['tp_price']:
+                    # 區分初始停損 vs trailing stop 觸發
+                    if (self.trailing_stop
+                            and trade['sl_price'] > trade['initial_sl_price']):
+                        exit_reason = "🟡 移動停利"
+                    else:
+                        exit_reason = "🔴 停損"
+                elif (not self.trailing_stop) and current_high >= trade['tp_price']:
+                    # 固定 TP 僅在非 trailing 模式下生效
                     exit_triggered = True
                     exit_price = trade['tp_price']
                     exit_reason = "🟢 停利"
@@ -112,11 +259,15 @@ class EventDrivenBacktester:
                     exit_reason = "⚪ 時間到期"
 
                 if exit_triggered:
-                    revenue = trade['shares'] * exit_price
+                    # 扣除賣出成本
+                    revenue = trade['shares'] * exit_price * (1 - self.sell_cost)
                     capital += revenue
 
-                    profit_pct = (exit_price - trade['entry_price']) / trade['entry_price']
-                    trades.append({
+                    # 計算含成本的真實報酬
+                    total_cost_in = trade['actual_cost']
+                    profit_pct = (revenue - total_cost_in) / total_cost_in
+
+                    trade_record = {
                         'Ticker': ticker,
                         'Entry_Date': trade['entry_date'].strftime('%Y-%m-%d'),
                         'Exit_Date': date.strftime('%Y-%m-%d'),
@@ -125,45 +276,135 @@ class EventDrivenBacktester:
                         'Return_Pct': round(profit_pct, 4),
                         'Reason': exit_reason,
                         'Days_Held': trade['days_held'],
-                    })
+                        'TP_Price': round(trade['tp_price'], 2),
+                        'SL_Price': round(trade['sl_price'], 2),
+                    }
+                    trades.append(trade_record)
                     exited_tickers.append(ticker)
+
+                    # 更新 per-stock 歷史（用於 blacklist）
+                    if ticker not in ticker_history:
+                        ticker_history[ticker] = []
+                    ticker_history[ticker].append(profit_pct)
 
             # 移除已出場的股票
             for t in exited_tickers:
                 del active_trades[t]
 
-            # ── Step 2: 處理今日進場（根據昨日收盤信號） ──
-            for ticker in close_df.columns:
-                score = total_score[ticker].iloc[i - 1]
-                ma = ma_60[ticker].iloc[i - 1]
-                current_close = close_df[ticker].iloc[i]
+            # ── Step 2: 計算當前總權益（用於 equity-based sizing） ──
+            current_equity = capital
+            for ticker, trade in active_trades.items():
+                close_val = close_df[ticker].iloc[i]
+                if not pd.isna(close_val):
+                    current_equity += trade['shares'] * close_val
 
-                if pd.isna(current_close) or pd.isna(score) or pd.isna(ma):
-                    continue
+            # ── Step 3: 處理今日進場（根據昨日收盤信號，今日 open 進場） ──
+            if len(active_trades) < max_positions:
+                # ── Regime Filter：大盤 < 60MA 時暫停所有進場 ──
+                regime_ok = True
+                if market_ma60 is not None:
+                    try:
+                        mkt_date = market_close.index.get_indexer([date], method='ffill')[0]
+                        if mkt_date >= 0:
+                            mkt_val = market_close.iloc[mkt_date]
+                            mkt_ma = market_ma60.iloc[mkt_date]
+                            if not pd.isna(mkt_val) and not pd.isna(mkt_ma):
+                                regime_ok = mkt_val > mkt_ma
+                    except Exception:
+                        pass
 
-                # 進場條件：
-                # 1. 尚未持有該股
-                # 2. 昨日 AI 評分 >= 門檻
-                # 3. 昨日收盤價 > 60MA（多頭趨勢確認）
-                if (ticker not in active_trades
-                        and score >= threshold
-                        and close_df[ticker].iloc[i - 1] > ma):
+                candidates = []
+                if regime_ok:
+                    for ticker in close_df.columns:
+                        if ticker in active_trades:
+                            continue
 
-                    trade_amount = self.initial_capital * self.position_size
-                    if capital >= trade_amount:
-                        shares = trade_amount / current_close
-                        capital -= trade_amount
+                        # ── Blacklist：最近 N 筆勝率太低則跳過 ──
+                        if self.blacklist_lookback > 0 and ticker in ticker_history:
+                            recent = ticker_history[ticker][-self.blacklist_lookback:]
+                            if len(recent) >= self.blacklist_lookback:
+                                wr = sum(1 for r in recent if r > 0) / len(recent)
+                                if wr < self.blacklist_min_wr:
+                                    continue
+
+                        score = total_score[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+                        ma = ma_60[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+                        prev_close = close_df[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+                        entry_price = open_df[ticker].iloc[i]  # v2: 用今日 open 進場
+
+                        if pd.isna(entry_price) or pd.isna(score) or pd.isna(ma):
+                            continue
+                        if pd.isna(prev_close) or entry_price <= 0:
+                            continue
+
+                        # 進場條件：
+                        # 1. 昨日 AI 評分 >= 安全下限
+                        # 2. 昨日收盤價 > 60MA（多頭趨勢確認）
+                        if not (score >= threshold and prev_close > ma):
+                            continue
+
+                        # ── Gap Filter：open 跳空太大則跳過 ──
+                        if self.gap_filter_atr > 0 and atr is not None:
+                            atr_val = atr[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+                            if not pd.isna(atr_val) and atr_val > 0:
+                                gap = abs(entry_price - prev_close)
+                                if gap > self.gap_filter_atr * atr_val:
+                                    continue
+
+                        # ── Volume Confirmation：成交量 > 20 日均量 ──
+                        if vol_ma20 is not None and ticker in vol_df.columns:
+                            today_vol = vol_df[ticker].iloc[i] if i < len(vol_df) else np.nan
+                            avg_vol = vol_ma20[ticker].iloc[i] if i < len(vol_ma20) else np.nan
+                            if not pd.isna(today_vol) and not pd.isna(avg_vol) and avg_vol > 0:
+                                if today_vol < avg_vol:
+                                    continue
+
+                        candidates.append((ticker, score, entry_price))
+
+                # Top-K 選股：按分數排序，取前 top_k 名
+                candidates.sort(key=lambda x: x[1], reverse=True)
+                slots_available = max_positions - len(active_trades)
+                selected = candidates[:min(top_k, slots_available)]
+
+                for ticker, score, entry_price in selected:
+                    # Equity-based position sizing
+                    trade_amount = current_equity * self.position_size
+                    actual_cost = trade_amount * (1 + self.buy_cost)  # 含買入手續費
+
+                    if capital >= actual_cost:
+                        shares = trade_amount / entry_price
+                        capital -= actual_cost
+
+                        # 計算 TP/SL 價格
+                        if self.tp_sl_mode == 'atr' and atr is not None:
+                            atr_val = atr[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+                            if pd.isna(atr_val) or atr_val <= 0:
+                                # fallback 到固定百分比
+                                tp_price = entry_price * (1 + self.tp_pct)
+                                sl_price = entry_price * (1 - self.sl_pct)
+                            else:
+                                tp_price = entry_price + atr_val * self.tp_atr_mult
+                                sl_price = entry_price - atr_val * self.sl_atr_mult
+                        else:
+                            tp_price = entry_price * (1 + self.tp_pct)
+                            sl_price = entry_price * (1 - self.sl_pct)
 
                         active_trades[ticker] = {
                             'shares': shares,
-                            'entry_price': current_close,
+                            'entry_price': entry_price,
                             'entry_date': date,
-                            'tp_price': current_close * (1 + self.tp_pct),
-                            'sl_price': current_close * (1 - self.sl_pct),
+                            'tp_price': tp_price,
+                            'sl_price': sl_price,
+                            'initial_sl_price': sl_price,  # 保存初始 SL 用於區分出場原因
+                            'highest_since_entry': entry_price,  # trailing stop 追蹤
+                            'atr_at_entry': atr_val if (self.tp_sl_mode == 'atr'
+                                                        and atr is not None
+                                                        and not pd.isna(atr_val)) else 0,
                             'days_held': 0,
+                            'actual_cost': actual_cost,
                         }
 
-            # ── Step 3: 結算今日總權益（現金 + 所有持倉市值） ──
+            # ── Step 4: 結算今日總權益（現金 + 所有持倉市值） ──
             today_equity = capital
             for ticker, trade in active_trades.items():
                 close_val = close_df[ticker].iloc[i]
@@ -179,9 +420,11 @@ class EventDrivenBacktester:
         if not trades_df.empty:
             wins = len(trades_df[trades_df['Return_Pct'] > 0])
             total = len(trades_df)
+            total_cost_impact = (self.buy_cost + self.sell_cost) * total
             print(f"   ✅ 回測完成：共 {total} 筆交易，"
                   f"勝率 {wins/total*100:.1f}%，"
-                  f"平均報酬 {trades_df['Return_Pct'].mean()*100:.2f}%")
+                  f"平均報酬 {trades_df['Return_Pct'].mean()*100:.2f}% "
+                  f"(含成本 ~{(self.buy_cost+self.sell_cost)*100:.2f}%/筆)")
         else:
             print("   ⚠️  回測完成但無任何交易觸發")
 

@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
 """
-AI 台股實戰區間交易系統 (Event-Driven Quantitative Trading Pipeline)
+AI 台股實戰區間交易系統 v2 (Event-Driven Quantitative Trading Pipeline)
 
-完整管線：資料下載 → AI 特徵排名 → 事件驅動回測 → HTML 報表產出
+完整管線：資料下載 → 動態 Universe → AI 特徵排名 → 事件驅動回測 → 風險分析 → HTML 報表
+
+v2 改進：
+- Entry 改為 t+1 open（對齊實盤）
+- 動態 Liquid Universe（全 TWSE，按流動性篩選 Top-N）
+- Top-K 選股取代固定 threshold
+- Equity-based position sizing
+- ATR 自適應 TP/SL
+- 台股交易成本（手續費 + 證交稅）
+- 完整風險指標（Sharpe/Sortino/MaxDD/Calmar）
+- 0050 Benchmark 對比
+- exchange_calendars 精確交易日
 
 使用方式：
     python ai_report.py
-    python ai_report.py --tickers 2330 2317 2454 --tp 0.15 --sl 0.08 --hold-days 20
+    python ai_report.py --tickers 2330 2317 2454 --static-pool
+    python ai_report.py --universe-size 100 --top-k 5
 """
 
 import argparse
@@ -15,19 +27,33 @@ import sys
 from datetime import datetime, timedelta
 
 import matplotlib
-matplotlib.use('Agg')  # 無 GUI 模式（CI/CD 需要）
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import pandas as pd
+import numpy as np
 
 # 確保 strategy/ 可被 import
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from strategy.ai_strategy import fetch_panel_data, engineer_features
+from strategy.ai_strategy import fetch_panel_data, engineer_features, build_liquid_universe
 from strategy.event_backtest import EventDrivenBacktester
+from strategy.risk_metrics import compute_risk_metrics, format_metrics_summary
+from strategy.benchmark import fetch_benchmark, equal_weight_benchmark, compute_excess_return
+
+# 嘗試載入 exchange_calendars
+try:
+    import exchange_calendars as xcals
+    TW_CALENDAR = xcals.get_calendar('XTAI')
+    HAS_EXCHANGE_CAL = True
+except ImportError:
+    TW_CALENDAR = None
+    HAS_EXCHANGE_CAL = False
+    print("⚠️ exchange_calendars 未安裝，最晚出場日將使用近似計算")
 
 
 # ==========================================
-# 預設股池：熱門權值、AI、航運、金融股
+# 預設股池：熱門權值、AI、航運、金融股（靜態池模式用）
 # ==========================================
 DEFAULT_TICKERS = [
     '2330', '2317', '2454', '2308', '2881',
@@ -35,23 +61,76 @@ DEFAULT_TICKERS = [
     '2891', '1519', '2379', '2303',
 ]
 
+# 擴展股池：全 TWSE 主要個股（動態 universe 模式用）
+# 包含上市 ETF、權值股、中型股，約 200 檔候選池
+EXTENDED_TICKERS = [
+    # 半導體
+    '2330', '2454', '2303', '3711', '2379', '6770', '3034', '2449',
+    '5274', '3529', '2408', '3443', '3035', '6415', '6525', '3661',
+    '3037', '2344', '6547',
+    # 電子
+    '2317', '2382', '2308', '2301', '2357', '2376', '2395', '3231',
+    '2474', '2353', '3481', '3017', '2345', '2383', '2356', '3044',
+    '2327', '3036', '2324', '2377', '2385', '2360', '2404',
+    '2412', '2459', '2458', '3045', '6505', '3023',
+    '3706', '3533', '2368', '4904', '4938', '6669',
+    # 金融
+    '2881', '2882', '2884', '2886', '2887', '2891', '2892',
+    '2880', '2883', '2885', '2888', '2889', '2890', '5880', '5876',
+    '2801', '2834', '2838', '2845', '2855', '2867', '2897',
+    # 傳產
+    '1301', '1303', '1326', '2002', '1101', '1102', '2912',
+    '1216', '2207', '9904', '1402', '9910', '1605', '2603',
+    '2609', '2615', '1519', '2606', '6005',
+    # 航運/觀光
+    '2618', '2610', '2605', '2634', '2637',
+    # 生技
+    '4142', '1760', '6446', '1707', '4743',
+    # 其他
+    '9945', '8454', '1504', '2105', '2201', '2204',
+    '5871', '6116', '6285', '3149', '6239',
+]
 
-def generate_report(trades_df, equity_df, total_score, close_df, config):
+# 去重
+EXTENDED_TICKERS = list(dict.fromkeys(EXTENDED_TICKERS))
+
+
+def get_next_n_trading_days(from_date, n_days):
     """
-    產出 AI 交易計畫 HTML 報表與資金曲線圖。
+    使用 exchange_calendars 計算從 from_date 起的第 n 個交易日。
 
     Parameters
     ----------
-    trades_df : pd.DataFrame
-        回測交易明細
-    equity_df : pd.DataFrame
-        每日資金曲線
-    total_score : pd.DataFrame
-        AI 評分矩陣
-    close_df : pd.DataFrame
-        收盤價矩陣
-    config : dict
-        策略參數 (tp_pct, sl_pct, max_hold_days, initial_capital)
+    from_date : datetime-like
+        起始日期
+    n_days : int
+        往後幾個交易日
+
+    Returns
+    -------
+    target_date : str
+        目標日期 (YYYY-MM-DD)
+    """
+    if HAS_EXCHANGE_CAL and TW_CALENDAR is not None:
+        try:
+            from_ts = pd.Timestamp(from_date)
+            # 取得足夠長的交易日列表
+            end_search = from_ts + pd.Timedelta(days=n_days * 2 + 30)
+            sessions = TW_CALENDAR.sessions_in_range(from_ts, end_search)
+            if len(sessions) > n_days:
+                return sessions[n_days].strftime('%Y-%m-%d')
+        except Exception:
+            pass
+
+    # Fallback: 用 1.4 倍近似
+    approx_date = pd.Timestamp(from_date) + timedelta(days=int(n_days * 1.4))
+    return approx_date.strftime('%Y-%m-%d')
+
+
+def generate_report(trades_df, equity_df, total_score, close_df, config,
+                    metrics, benchmark_equity=None, ew_equity=None):
+    """
+    產出 AI 交易計畫 HTML 報表與資金曲線圖（v2 完整版）。
     """
     print("📊 產出 AI 交易計畫與績效報表...")
 
@@ -59,72 +138,156 @@ def generate_report(trades_df, equity_df, total_score, close_df, config):
     sl_pct = config['sl_pct']
     max_hold_days = config['max_hold_days']
     initial_capital = config['initial_capital']
+    tp_sl_mode = config.get('tp_sl_mode', 'atr')
+    top_k = config.get('top_k', 3)
 
-    # === 績效統計 ===
-    total_ret = (equity_df['Equity'].iloc[-1] / initial_capital - 1) * 100
+    total_ret = metrics['total_return'] * 100
 
-    if not trades_df.empty:
-        total_trades = len(trades_df)
-        win_rate = len(trades_df[trades_df['Return_Pct'] > 0]) / total_trades * 100
-        avg_return = trades_df['Return_Pct'].mean() * 100
-
-        # 出場原因統計
-        reason_counts = trades_df['Reason'].value_counts().to_dict()
-    else:
-        total_trades, win_rate, avg_return = 0, 0, 0
-        reason_counts = {}
-
-    # === 繪製資金曲線 ===
+    # === 繪製資金曲線（含 Benchmark） ===
     plt.style.use('dark_background')
-    fig, ax = plt.subplots(figsize=(14, 5))
-    ax.plot(equity_df.index, equity_df['Equity'], color='#00e5ff', lw=2, label='Strategy Equity')
-    ax.axhline(initial_capital, color='#555', linestyle='--', alpha=0.7, label='Initial Capital')
-    ax.fill_between(equity_df.index, initial_capital, equity_df['Equity'],
-                     where=equity_df['Equity'] >= initial_capital, alpha=0.15, color='#00e5ff')
-    ax.fill_between(equity_df.index, initial_capital, equity_df['Equity'],
-                     where=equity_df['Equity'] < initial_capital, alpha=0.15, color='#ff4444')
-    ax.set_title(f'AI Quant Backtest  |  TP: +{tp_pct*100:.0f}%  SL: -{sl_pct*100:.0f}%  Hold: {max_hold_days}D',
-                 fontweight='bold', fontsize=14, color='#fff')
-    ax.set_ylabel('Portfolio Value (TWD)', fontsize=11)
-    ax.legend(fontsize=10)
-    ax.grid(alpha=0.15)
+    fig, axes = plt.subplots(2, 1, figsize=(14, 9), height_ratios=[3, 1],
+                              gridspec_kw={'hspace': 0.25})
+
+    ax1, ax2 = axes
+
+    # 主圖：策略 + Benchmark
+    ax1.plot(equity_df.index, equity_df['Equity'], color='#00e5ff', lw=2, label='Strategy')
+    ax1.axhline(initial_capital, color='#555', linestyle='--', alpha=0.5, label='Initial Capital')
+    ax1.fill_between(equity_df.index, initial_capital, equity_df['Equity'],
+                     where=equity_df['Equity'] >= initial_capital, alpha=0.1, color='#00e5ff')
+    ax1.fill_between(equity_df.index, initial_capital, equity_df['Equity'],
+                     where=equity_df['Equity'] < initial_capital, alpha=0.1, color='#ff4444')
+
+    if benchmark_equity is not None and len(benchmark_equity) > 0:
+        # 將 benchmark 縮放到同一起始資金
+        common_idx = equity_df.index.intersection(benchmark_equity.index)
+        if len(common_idx) > 0:
+            bench_scaled = benchmark_equity.loc[common_idx] * initial_capital
+            ax1.plot(common_idx, bench_scaled, color='#ffab00', lw=1.5, alpha=0.8,
+                     label='0050 Buy & Hold', linestyle='--')
+
+    if ew_equity is not None and len(ew_equity) > 0:
+        common_idx = equity_df.index.intersection(ew_equity.index)
+        if len(common_idx) > 0:
+            ew_scaled = ew_equity.loc[common_idx] * initial_capital
+            ax1.plot(common_idx, ew_scaled, color='#ab47bc', lw=1.2, alpha=0.6,
+                     label='Equal-Weight', linestyle=':')
+
+    mode_label = f"ATR×{config.get('tp_atr_mult', 3)}/{config.get('sl_atr_mult', 1.5)}" \
+        if tp_sl_mode == 'atr' else f"TP +{tp_pct*100:.0f}% / SL -{sl_pct*100:.0f}%"
+    ax1.set_title(f'AI Quant v2  |  {mode_label}  |  Top-{top_k}  |  Hold ≤{max_hold_days}D',
+                  fontweight='bold', fontsize=14, color='#fff')
+    ax1.set_ylabel('Portfolio Value (TWD)', fontsize=11)
+    ax1.legend(fontsize=9, loc='upper left')
+    ax1.grid(alpha=0.15)
+
+    # 子圖：Drawdown
+    equity = equity_df['Equity']
+    cummax = equity.cummax()
+    drawdown = (equity / cummax - 1) * 100
+    ax2.fill_between(drawdown.index, 0, drawdown, color='#ff4444', alpha=0.4)
+    ax2.plot(drawdown.index, drawdown, color='#ff4444', lw=1)
+    ax2.set_ylabel('Drawdown (%)', fontsize=10)
+    ax2.set_xlabel('')
+    ax2.grid(alpha=0.15)
+    ax2.set_ylim(drawdown.min() * 1.2, 2)
+
     fig.tight_layout()
     fig.savefig('backtest_chart.png', dpi=150, bbox_inches='tight', facecolor='#121212')
     plt.close(fig)
     print("   📈 資金曲線已存為 backtest_chart.png")
 
+    # === 建立 per-stock 歷史績效統計 ===
+    stock_stats = {}
+    if not trades_df.empty:
+        for ticker in trades_df['Ticker'].unique():
+            t = trades_df[trades_df['Ticker'] == ticker]
+            wins = len(t[t['Return_Pct'] > 0])
+            total = len(t)
+            stock_stats[ticker] = {
+                'trades': total,
+                'win_rate': wins / total * 100 if total > 0 else 0,
+                'avg_return': t['Return_Pct'].mean() * 100,
+                'total_return': t['Return_Pct'].sum() * 100,
+            }
+
     # === 今日交易計畫 ===
     latest_date = total_score.index[-1]
-    today_scores = total_score.loc[latest_date].sort_values(ascending=False)
-    threshold = config.get('threshold', 3.2)
+    today_scores = total_score.loc[latest_date].dropna().sort_values(ascending=False)
 
     trading_plan_rows = ""
-    for ticker, score in today_scores.head(15).items():
-        price = close_df[ticker].iloc[-1]
+    shown_count = 0
+    for ticker, score in today_scores.items():
+        if shown_count >= 20:
+            break
+
+        price = close_df[ticker].iloc[-1] if ticker in close_df.columns else np.nan
         if pd.isna(price):
             continue
 
-        if score >= threshold:
-            tp_price = price * (1 + tp_pct)
-            sl_price = price * (1 - sl_pct)
-            time_exit_date = (latest_date + timedelta(days=int(max_hold_days * 1.4))).strftime('%Y-%m-%d')
+        # 趨勢過濾
+        ma_val = close_df[ticker].rolling(60).mean().iloc[-1] if ticker in close_df.columns else np.nan
+        above_ma = (not pd.isna(ma_val)) and (price > ma_val)
+
+        if score >= config.get('threshold', 2.0) and above_ma:
+            # 計算 TP/SL
+            if tp_sl_mode == 'atr':
+                # 用近似 ATR
+                recent = close_df[ticker].tail(21).pct_change().dropna()
+                atr_approx = recent.abs().mean() * price * 20  # 近似 20 日 ATR
+                if atr_approx > 0:
+                    tp_price = price + atr_approx * config.get('tp_atr_mult', 3.0)
+                    sl_price = price - atr_approx * config.get('sl_atr_mult', 1.5)
+                    tp_pct_display = (tp_price / price - 1) * 100
+                    sl_pct_display = (1 - sl_price / price) * 100
+                else:
+                    tp_price = price * (1 + tp_pct)
+                    sl_price = price * (1 - sl_pct)
+                    tp_pct_display = tp_pct * 100
+                    sl_pct_display = sl_pct * 100
+            else:
+                tp_price = price * (1 + tp_pct)
+                sl_price = price * (1 - sl_pct)
+                tp_pct_display = tp_pct * 100
+                sl_pct_display = sl_pct * 100
+
+            time_exit = get_next_n_trading_days(latest_date, max_hold_days)
             status = '<span style="color:#00ff00; font-weight:bold;">🟢 建議買進</span>'
-            plan = (f'<b>停利:</b> <span style="color:#00ff00">{tp_price:.1f}</span> (+{tp_pct*100:.0f}%) '
-                    f'<br><b>停損:</b> <span style="color:#ff4444">{sl_price:.1f}</span> (-{sl_pct*100:.0f}%) '
-                    f'<br><b>最晚出場:</b> {time_exit_date}')
+            plan = (f'<b>停利:</b> <span style="color:#00ff00">{tp_price:.1f}</span>'
+                    f' (+{tp_pct_display:.1f}%) '
+                    f'<br><b>停損:</b> <span style="color:#ff4444">{sl_price:.1f}</span>'
+                    f' (-{sl_pct_display:.1f}%) '
+                    f'<br><b>最晚出場:</b> {time_exit}')
         else:
             status = '<span style="color:#aaaaaa">⚪ 觀望</span>'
             plan = "-"
 
+        # Per-stock 歷史績效標籤
+        ss = stock_stats.get(ticker, None)
+        if ss and ss['trades'] >= 2:
+            wr_color = '#00ff00' if ss['win_rate'] >= 50 else '#ff4444'
+            ar_color = '#00ff00' if ss['avg_return'] > 0 else '#ff4444'
+            hist_badge = (
+                f'<span style="font-size:0.72rem; color:#888;">'
+                f'歷史 <b>{ss["trades"]}</b>筆 | '
+                f'勝率 <b style="color:{wr_color}">{ss["win_rate"]:.0f}%</b> | '
+                f'均報酬 <b style="color:{ar_color}">{ss["avg_return"]:+.1f}%</b>'
+                f'</span>'
+            )
+        else:
+            hist_badge = '<span style="font-size:0.72rem; color:#555;">歷史資料不足</span>'
+
         trading_plan_rows += (
             f'<tr><td>{ticker}</td><td>{score:.2f}</td>'
-            f'<td>{price:.1f}</td><td>{status}</td><td>{plan}</td></tr>\n'
+            f'<td>{price:.1f}</td><td>{status}</td><td>{plan}</td>'
+            f'<td>{hist_badge}</td></tr>\n'
         )
+        shown_count += 1
 
-    # === 歷史交易紀錄（最近 15 筆）===
+    # === 歷史交易紀錄（最近 20 筆）===
     trade_history_rows = ""
     if not trades_df.empty:
-        for _, row in trades_df.tail(15).iloc[::-1].iterrows():
+        for _, row in trades_df.tail(20).iloc[::-1].iterrows():
             color = "#00ff00" if row['Return_Pct'] > 0 else "#ff4444"
             trade_history_rows += (
                 f'<tr>'
@@ -141,25 +304,37 @@ def generate_report(trades_df, equity_df, total_score, close_df, config):
 
     # === 出場原因統計 ===
     reason_stats_rows = ""
-    for reason, count in reason_counts.items():
-        subset = trades_df[trades_df['Reason'] == reason]
-        avg_ret = subset['Return_Pct'].mean() * 100
-        reason_stats_rows += (
-            f'<tr><td>{reason}</td><td>{count} 筆</td>'
-            f'<td style="color:{"#00ff00" if avg_ret > 0 else "#ff4444"}">{avg_ret:+.2f}%</td></tr>\n'
-        )
+    if not trades_df.empty:
+        reason_counts = trades_df['Reason'].value_counts()
+        for reason, count in reason_counts.items():
+            subset = trades_df[trades_df['Reason'] == reason]
+            avg_ret = subset['Return_Pct'].mean() * 100
+            reason_stats_rows += (
+                f'<tr><td>{reason}</td><td>{count} 筆</td>'
+                f'<td style="color:{"#00ff00" if avg_ret > 0 else "#ff4444"}">{avg_ret:+.2f}%</td></tr>\n'
+            )
+
+    # === 風險指標卡片 ===
+    m = metrics
+    total_ret_color = "#00ff00" if total_ret > 0 else "#ff4444"
+    sharpe_color = "#00ff00" if m['sharpe'] > 0.5 else ("#ffab00" if m['sharpe'] > 0 else "#ff4444")
+    dd_color = "#ff4444" if m['max_drawdown_pct'] < -0.15 else "#ffab00"
 
     # === 產出 HTML ===
     report_date = latest_date.strftime('%Y-%m-%d')
-    total_ret_color = "#00ff00" if total_ret > 0 else "#ff4444"
+    cost_desc = f"買 {config.get('buy_cost', 0.001425)*100:.3f}% + 賣 {config.get('sell_cost', 0.004425)*100:.3f}%"
+    mode_html = f"ATR×{config.get('tp_atr_mult', 3)}/{config.get('sl_atr_mult', 1.5)}" \
+        if tp_sl_mode == 'atr' else f"停利 +{tp_pct*100:.0f}% 停損 -{sl_pct*100:.0f}%"
+    if config.get('trailing_stop', False):
+        mode_html += f" +Trailing({config.get('trailing_atr_mult', 2.0)}×ATR)"
 
     html = f"""<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 台股區間交易計畫 — {report_date}</title>
-    <meta name="description" content="AI 驅動的台股量化交易系統，提供每日 OCO 智慧掛單建議與精確回測績效">
+    <title>AI 台股量化交易 v2 — {report_date}</title>
+    <meta name="description" content="AI 驅動的台股量化交易系統 v2，完整風險報告、Benchmark 對比、OCO 智慧掛單建議">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -193,24 +368,26 @@ def generate_report(trades_df, equity_df, total_score, close_df, config):
         }}
         .stats {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 12px;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 10px;
             margin-bottom: 28px;
         }}
         .stat-card {{
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            padding: 20px;
+            padding: 16px;
             border-radius: 12px;
             text-align: center;
             border-left: 4px solid #00e5ff;
         }}
+        .stat-card.risk {{ border-left-color: #ab47bc; }}
+        .stat-card.benchmark {{ border-left-color: #ffab00; }}
         .stat-card .value {{
-            font-size: 1.8rem;
+            font-size: 1.5rem;
             font-weight: 700;
             margin: 4px 0;
         }}
         .stat-card .label {{
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             color: #888;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -224,16 +401,16 @@ def generate_report(trades_df, equity_df, total_score, close_df, config):
             overflow: hidden;
         }}
         th, td {{
-            padding: 12px 14px;
+            padding: 10px 12px;
             text-align: left;
             border-bottom: 1px solid #252540;
-            font-size: 0.88rem;
+            font-size: 0.85rem;
         }}
         th {{
             background: #16213e;
             color: #00e5ff;
             font-weight: 600;
-            font-size: 0.82rem;
+            font-size: 0.78rem;
             text-transform: uppercase;
             letter-spacing: 0.3px;
         }}
@@ -253,44 +430,92 @@ def generate_report(trades_df, equity_df, total_score, close_df, config):
             font-size: 0.82rem;
             color: #999;
         }}
-        .tag {{
+        .config-badge {{
             display: inline-block;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 0.75rem;
+            padding: 3px 10px;
+            border-radius: 6px;
+            font-size: 0.72rem;
             font-weight: 600;
+            background: #16213e;
+            color: #00e5ff;
+            margin: 2px;
+        }}
+        .section-note {{
+            font-size: 0.8rem;
+            color: #666;
+            margin-bottom: 8px;
         }}
     </style>
 </head>
 <body>
 <div class="container">
 
-    <h1>🎯 AI 台股實戰區間交易計畫</h1>
+    <h1>🎯 AI 台股量化交易 v2</h1>
     <p class="subtitle">
         Event-Driven System &nbsp;|&nbsp; 報表日期: {report_date} &nbsp;|&nbsp;
-        🛡️ 停利 +{tp_pct*100:.0f}% &nbsp; 停損 -{sl_pct*100:.0f}% &nbsp; 最長持有 {max_hold_days} 天
+        <span class="config-badge">🛡️ {mode_html}</span>
+        <span class="config-badge">🎯 Top-{top_k}</span>
+        <span class="config-badge">⏱️ 最長 {max_hold_days} 天</span>
+        <span class="config-badge">💰 成本: {cost_desc}</span>
     </p>
 
+    <h2>📊 績效總覽</h2>
     <div class="stats">
         <div class="stat-card">
             <div class="label">策略總報酬率</div>
             <div class="value" style="color:{total_ret_color};">{total_ret:+.1f}%</div>
         </div>
         <div class="stat-card">
-            <div class="label">完成交易次數</div>
-            <div class="value">{total_trades}</div>
+            <div class="label">年化報酬率</div>
+            <div class="value" style="color:{total_ret_color};">{m['ann_return']*100:+.1f}%</div>
         </div>
         <div class="stat-card">
-            <div class="label">真實回測勝率</div>
-            <div class="value" style="color:#00ff00;">{win_rate:.1f}%</div>
+            <div class="label">年化波動率</div>
+            <div class="value">{m['ann_volatility']*100:.1f}%</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">Sharpe Ratio</div>
+            <div class="value" style="color:{sharpe_color};">{m['sharpe']:.2f}</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">Sortino Ratio</div>
+            <div class="value">{m['sortino']:.2f}</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">最大回撤</div>
+            <div class="value" style="color:{dd_color};">{m['max_drawdown_pct']*100:.1f}%</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">Calmar Ratio</div>
+            <div class="value">{m['calmar']:.2f}</div>
         </div>
         <div class="stat-card">
-            <div class="label">單筆平均期望值</div>
-            <div class="value">{avg_return:+.2f}%</div>
+            <div class="label">完成交易數</div>
+            <div class="value">{m['total_trades']}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">勝率</div>
+            <div class="value" style="color:#00ff00;">{m['win_rate']*100:.1f}%</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Profit Factor</div>
+            <div class="value">{m['profit_factor']:.2f}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">平均報酬/筆</div>
+            <div class="value">{m['avg_return']*100:+.2f}%</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">平均持有天數</div>
+            <div class="value">{m['avg_days_held']:.0f}</div>
         </div>
     </div>
 
-    <h2>🚀 今日 AI 交易執行單 (建議掛 OCO 智慧單)</h2>
+    <h2>🚀 今日 AI 交易執行單</h2>
+    <p class="section-note">
+        信號基於昨日收盤產生，建議於明日開盤價附近掛單進場。
+        {f'最晚出場日使用 XTAI 交易日曆計算' if HAS_EXCHANGE_CAL else '最晚出場日為近似值（未安裝 exchange_calendars）'}
+    </p>
     <table>
         <thead>
             <tr>
@@ -298,7 +523,8 @@ def generate_report(trades_df, equity_df, total_score, close_df, config):
                 <th>AI 評分</th>
                 <th>今日收盤</th>
                 <th>操作狀態</th>
-                <th>🎯 區間執行計畫 (停利 / 停損 / 時間)</th>
+                <th>🎯 區間執行計畫</th>
+                <th>📊 歷史績效</th>
             </tr>
         </thead>
         <tbody>
@@ -306,8 +532,8 @@ def generate_report(trades_df, equity_df, total_score, close_df, config):
         </tbody>
     </table>
 
-    <h2>📊 真實資金曲線 (含停損停利與資金控管)</h2>
-    <img src="backtest_chart.png" alt="AI Quantitative Backtest Equity Curve">
+    <h2>📈 資金曲線 vs Benchmark</h2>
+    <img src="backtest_chart.png" alt="AI Quantitative Backtest Equity Curve with Benchmark">
 
     <h2>📋 出場原因分布統計</h2>
     <table>
@@ -317,7 +543,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config):
         </tbody>
     </table>
 
-    <h2>📜 最近交易紀錄 (最新 15 筆)</h2>
+    <h2>📜 最近交易紀錄 (最新 20 筆)</h2>
     <table>
         <thead>
             <tr>
@@ -334,6 +560,9 @@ def generate_report(trades_df, equity_df, total_score, close_df, config):
     <div class="disclaimer">
         ⚠️ <b>免責聲明：</b>本報表由 AI 量化模型自動產出，僅供學術研究與技術交流之用，
         不構成任何投資建議。歷史回測績效不代表未來實際報酬，投資有風險，決策請自行負責。
+        <br><br>
+        <b>v2 方法論：</b>Entry = t+1 open | TP/SL = {mode_html} | 選股 = Top-{top_k} cross-sectional rank |
+        成本 = {cost_desc} | 回撤期 = {m['years']:.1f} 年
     </div>
 
 </div>
@@ -343,85 +572,240 @@ def generate_report(trades_df, equity_df, total_score, close_df, config):
     with open('stock_report.html', 'w', encoding='utf-8') as f:
         f.write(html)
 
+    # === 輸出 artifacts ===
+    os.makedirs('artifacts', exist_ok=True)
+    date_str = latest_date.strftime('%Y%m%d')
+
+    if not trades_df.empty:
+        trades_df.to_csv(f'artifacts/trades_{date_str}.csv', index=False)
+
+    equity_df.to_csv(f'artifacts/equity_{date_str}.csv')
+
+    # 信號快照
+    today_signals = total_score.loc[[latest_date]].T
+    today_signals.columns = ['Score']
+    today_signals = today_signals.dropna().sort_values('Score', ascending=False)
+    today_signals.to_csv(f'artifacts/signals_{date_str}.csv')
+
     print(f"   ✅ 報表已生成：stock_report.html")
+    print(f"   📁 Artifacts 已存入 artifacts/ 目錄")
 
 
 def parse_args():
     """解析命令列參數。"""
     parser = argparse.ArgumentParser(
-        description='AI 台股區間交易系統 — 事件驅動回測與交易計畫產生器'
+        description='AI 台股量化交易系統 v2 — 事件驅動回測與交易計畫產生器'
+    )
+    # 股池
+    parser.add_argument(
+        '--tickers', nargs='+', default=None,
+        help='手動指定股池（靜態池模式）'
     )
     parser.add_argument(
-        '--tickers', nargs='+', default=DEFAULT_TICKERS,
-        help='股池代號列表 (預設: 14 檔熱門股)'
+        '--static-pool', action='store_true',
+        help='使用靜態池模式（14 檔預設股）而非動態 Universe'
+    )
+    parser.add_argument(
+        '--universe-size', type=int, default=50,
+        help='動態 Universe 大小 (預設: 50)'
+    )
+
+    # TP/SL
+    parser.add_argument(
+        '--tp-sl-mode', choices=['fixed', 'atr'], default='atr',
+        help='TP/SL 模式: fixed=固定百分比, atr=ATR倍數 (預設: atr)'
     )
     parser.add_argument(
         '--tp', type=float, default=0.15,
-        help='停利百分比 (預設: 0.15 = +15%%)'
+        help='固定模式停利百分比 (預設: 0.15 = +15%%)'
     )
     parser.add_argument(
         '--sl', type=float, default=0.08,
-        help='停損百分比 (預設: 0.08 = -8%%)'
+        help='固定模式停損百分比 (預設: 0.08 = -8%%)'
     )
     parser.add_argument(
-        '--hold-days', type=int, default=20,
-        help='最大持倉交易日數 (預設: 20)'
+        '--tp-atr', type=float, default=3.0,
+        help='ATR 模式停利倍數 (預設: 3.0)'
     )
     parser.add_argument(
-        '--days', type=int, default=800,
-        help='歷史回測天數 (預設: 800)'
+        '--sl-atr', type=float, default=2.0,
+        help='ATR 模式停損倍數 (預設: 2.0)'
+    )
+
+    # Trailing Stop
+    parser.add_argument(
+        '--trailing', action='store_true',
+        help='啟用移動停利 (Trailing Stop)，停用固定 TP，讓強趨勢延伸'
     )
     parser.add_argument(
-        '--threshold', type=float, default=3.2,
-        help='AI 評分進場門檻 (預設: 3.2，滿分 4.0)'
+        '--trailing-atr', type=float, default=2.0,
+        help='移動停利 ATR 倍數 (預設: 2.0, 從最高點回落此倍數 ATR 觸發)'
     )
+
+    # 選股
+    parser.add_argument(
+        '--top-k', type=int, default=3,
+        help='每日最多進場股票數 (預設: 3)'
+    )
+    parser.add_argument(
+        '--threshold', type=float, default=2.0,
+        help='AI 評分安全下限 (預設: 2.0，低於此分數不進場)'
+    )
+
+    # 持倉
+    parser.add_argument(
+        '--hold-days', type=int, default=30,
+        help='最大持倉交易日數 (預設: 30)'
+    )
+
+    # 進場過濾器
+    parser.add_argument(
+        '--regime-filter', action='store_true',
+        help='啟用大盤過濾 (0050 > 60MA 才允許進場)'
+    )
+    parser.add_argument(
+        '--gap-filter', type=float, default=0,
+        help='跳空過濾 ATR 倍數 (預設: 0=停用, 1.0=open 跳空超過 1 ATR 則跳過)'
+    )
+    parser.add_argument(
+        '--volume-confirm', action='store_true',
+        help='啟用成交量確認 (進場日成交量 > 20日均量)'
+    )
+    parser.add_argument(
+        '--blacklist', type=int, default=0,
+        help='動態黑名單回顧筆數 (預設: 0=停用, 10=最近10筆勝率<25%%則排除)'
+    )
+
+    # 資金
     parser.add_argument(
         '--capital', type=float, default=1_000_000,
         help='初始模擬資金 (預設: 1000000)'
     )
+    parser.add_argument(
+        '--position-size', type=float, default=0.10,
+        help='每筆倉位佔當前權益比例 (預設: 0.10 = 10%%)'
+    )
+
+    # 成本
+    parser.add_argument(
+        '--buy-cost', type=float, default=0.001425,
+        help='買入手續費率 (預設: 0.001425 = 0.1425%%)'
+    )
+    parser.add_argument(
+        '--sell-cost', type=float, default=0.004425,
+        help='賣出成本率 (手續費+證交稅, 預設: 0.004425 = 0.1425%%+0.3%%)'
+    )
+
+    # 回測
+    parser.add_argument(
+        '--days', type=int, default=800,
+        help='歷史回測天數 (預設: 800)'
+    )
+
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
 
+    # 決定股池
+    if args.static_pool or args.tickers:
+        tickers = args.tickers if args.tickers else DEFAULT_TICKERS
+        use_dynamic = False
+    else:
+        tickers = EXTENDED_TICKERS
+        use_dynamic = True
+
+    mode_str = f"動態 Universe (Top-{args.universe_size})" if use_dynamic else f"靜態 ({len(tickers)} 檔)"
+    tp_sl_str = f"ATR×{args.tp_atr}/{args.sl_atr}" if args.tp_sl_mode == 'atr' \
+        else f"+{args.tp*100:.0f}%/-{args.sl*100:.0f}%"
+    cost_str = f"買 {args.buy_cost*100:.3f}% 賣 {args.sell_cost*100:.3f}%"
+
+    trailing_str = f" +Trailing({args.trailing_atr}×ATR)" if args.trailing else ""
+
     print("=" * 60)
-    print("🎯 AI 台股實戰區間交易系統 v2.0")
+    print("🎯 AI 台股量化交易系統 v2.0")
     print("=" * 60)
-    print(f"   股池: {', '.join(args.tickers)}")
-    print(f"   停利: +{args.tp*100:.0f}%  停損: -{args.sl*100:.0f}%  "
-          f"持倉上限: {args.hold_days} 天")
-    print(f"   回測天數: {args.days}  進場門檻: {args.threshold}")
+    print(f"   股池: {mode_str}")
+    print(f"   TP/SL: {tp_sl_str}{trailing_str}  Top-K: {args.top_k}  持倉上限: {args.hold_days} 天")
+    print(f"   成本: {cost_str}")
+    print(f"   回測天數: {args.days}")
     print("=" * 60)
 
     # Phase 1: 資料下載
-    close_df, high_df, low_df, vol_df = fetch_panel_data(args.tickers, days=args.days)
+    close_df, open_df, high_df, low_df, vol_df = fetch_panel_data(tickers, days=args.days)
 
-    # Phase 2: 特徵工程
-    total_score, ma_60 = engineer_features(close_df, vol_df)
+    # Phase 2: 動態 Universe 或靜態池
+    if use_dynamic:
+        universe_mask = build_liquid_universe(close_df, vol_df, top_n=args.universe_size)
+    else:
+        universe_mask = None
 
-    # Phase 3 & 4: 事件驅動回測
+    # Phase 3: 特徵工程
+    total_score, ma_60, atr_df = engineer_features(close_df, vol_df, universe_mask)
+
+    # Phase 3.5: 提前下載 0050 用於 regime filter
+    market_close = None
+    if args.regime_filter:
+        print("\n📊 下載大盤指數 (0050) 用於 regime filter...")
+        bench_raw = fetch_benchmark('0050', days=args.days)
+        if len(bench_raw) > 0:
+            market_close = bench_raw * bench_raw.iloc[0]  # 還原為原始價格
+
+    # Phase 4: 事件驅動回測
     backtester = EventDrivenBacktester(
         tp_pct=args.tp,
         sl_pct=args.sl,
         max_hold_days=args.hold_days,
         initial_capital=args.capital,
-        position_size=0.10,
+        position_size=args.position_size,
+        tp_sl_mode=args.tp_sl_mode,
+        tp_atr_mult=args.tp_atr,
+        sl_atr_mult=args.sl_atr,
+        trailing_stop=args.trailing,
+        trailing_atr_mult=args.trailing_atr,
+        regime_filter=args.regime_filter,
+        gap_filter_atr=args.gap_filter,
+        volume_confirm=args.volume_confirm,
+        blacklist_lookback=args.blacklist,
+        buy_cost=args.buy_cost,
+        sell_cost=args.sell_cost,
     )
     trades_df, equity_df = backtester.run(
-        total_score, close_df, high_df, low_df, ma_60,
+        total_score, close_df, open_df, high_df, low_df, ma_60,
+        top_k=args.top_k,
         threshold=args.threshold,
+        market_close=market_close,
+        vol_df=vol_df,
     )
 
-    # Phase 5: 報表產出
+    # Phase 5: 風險指標
+    metrics = compute_risk_metrics(equity_df, trades_df, args.capital)
+    print(format_metrics_summary(metrics))
+
+    # Phase 6: Benchmark
+    print("\n📊 載入 Benchmark 進行比較...")
+    benchmark_equity = fetch_benchmark('0050', days=args.days)
+    ew_equity = equal_weight_benchmark(close_df)
+
+    # Phase 7: 報表產出
     config = {
         'tp_pct': args.tp,
         'sl_pct': args.sl,
         'max_hold_days': args.hold_days,
         'initial_capital': args.capital,
         'threshold': args.threshold,
+        'tp_sl_mode': args.tp_sl_mode,
+        'tp_atr_mult': args.tp_atr,
+        'sl_atr_mult': args.sl_atr,
+        'trailing_stop': args.trailing,
+        'trailing_atr_mult': args.trailing_atr,
+        'top_k': args.top_k,
+        'buy_cost': args.buy_cost,
+        'sell_cost': args.sell_cost,
     }
-    generate_report(trades_df, equity_df, total_score, close_df, config)
+    generate_report(trades_df, equity_df, total_score, close_df, config,
+                    metrics, benchmark_equity, ew_equity)
     print("\n🚀 全部完成！請打開 stock_report.html 查看結果。")
 
 

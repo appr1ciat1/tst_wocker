@@ -1,4 +1,4 @@
-name: AI Quant Trading Report
+name: AI Quant Trading Report v2
 
 on:
   schedule:
@@ -6,22 +6,30 @@ on:
     - cron: '0 9 * * 1-5'
   workflow_dispatch:
     inputs:
-      tp_pct:
-        description: 'Take Profit 停利 (例如 0.15 = +15%)'
+      tp_sl_mode:
+        description: 'TP/SL 模式: atr 或 fixed'
         required: false
-        default: '0.15'
-      sl_pct:
-        description: 'Stop Loss 停損 (例如 0.08 = -8%)'
+        default: 'atr'
+      tp_atr:
+        description: 'ATR 模式停利倍數'
         required: false
-        default: '0.08'
+        default: '3.0'
+      sl_atr:
+        description: 'ATR 模式停損倍數'
+        required: false
+        default: '1.5'
       hold_days:
         description: '最大持倉天數'
         required: false
         default: '20'
-      tickers:
-        description: '股池 (空格分隔，例如: 2330 2317 2454)'
+      top_k:
+        description: '每日最多進場股票數'
         required: false
-        default: '2330 2317 2454 2308 2881 2603 3231 3481 2382 2609 2891 1519 2379 2303'
+        default: '3'
+      universe_size:
+        description: '動態 Universe 大小'
+        required: false
+        default: '50'
 
 jobs:
   generate-report:
@@ -37,23 +45,35 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install yfinance pandas numpy matplotlib
+          pip install -r requirements.txt
 
-      - name: Run AI Quant Pipeline
+      - name: Run AI Quant Pipeline v2
         run: |
-          TP=${{ github.event.inputs.tp_pct || '0.15' }}
-          SL=${{ github.event.inputs.sl_pct || '0.08' }}
+          TP_SL_MODE=${{ github.event.inputs.tp_sl_mode || 'atr' }}
+          TP_ATR=${{ github.event.inputs.tp_atr || '3.0' }}
+          SL_ATR=${{ github.event.inputs.sl_atr || '1.5' }}
           HOLD=${{ github.event.inputs.hold_days || '20' }}
-          TICKERS="${{ github.event.inputs.tickers || '2330 2317 2454 2308 2881 2603 3231 3481 2382 2609 2891 1519 2379 2303' }}"
-          python ai_report.py --tp $TP --sl $SL --hold-days $HOLD --tickers $TICKERS
+          TOP_K=${{ github.event.inputs.top_k || '3' }}
+          UNIV=${{ github.event.inputs.universe_size || '50' }}
+          python ai_report.py \
+            --tp-sl-mode $TP_SL_MODE \
+            --tp-atr $TP_ATR \
+            --sl-atr $SL_ATR \
+            --hold-days $HOLD \
+            --top-k $TOP_K \
+            --universe-size $UNIV
 
-      - name: Commit and force push (no history)
+      - name: Cleanup old artifacts (keep last 180 days)
+        run: |
+          if [ -d "artifacts" ]; then
+            find artifacts/ -type f -mtime +180 -delete 2>/dev/null || true
+            echo "🧹 Cleaned artifacts older than 180 days"
+          fi
+
+      - name: Commit and push (preserve history)
         run: |
           git config --global user.email "voidful.stack@gmail.com"
           git config --global user.name "Voidful"
-          git checkout --orphan latest
           git add -A
-          git commit -m "🎯 AI Trading Report Update ($(date -u '+%Y-%m-%d'))" || echo "No changes to commit"
-          git branch -D main
-          git branch -m main
-          git push -f origin main
+          git commit -m "📊 AI Trading Report v2 ($(date -u '+%Y-%m-%d'))" || echo "No changes to commit"
+          git push origin main
