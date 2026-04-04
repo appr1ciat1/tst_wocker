@@ -21,7 +21,7 @@ on:
       hold_days:
         description: '最大持倉天數'
         required: false
-        default: '30'
+        default: '20'
       top_k:
         description: '每日最多進場股票數'
         required: false

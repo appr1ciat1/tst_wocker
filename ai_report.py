@@ -798,8 +798,8 @@ def parse_args():
 
     # 持倉
     parser.add_argument(
-        '--hold-days', type=int, default=30,
-        help='最大持倉交易日數 (預設: 30)'
+        '--hold-days', type=int, default=20,
+        help='最大持倉交易日數 (預設: 20)'
     )
 
     # 進場過濾器
