@@ -128,9 +128,15 @@ def get_next_n_trading_days(from_date, n_days):
 
 
 def generate_report(trades_df, equity_df, total_score, close_df, config,
-                    metrics, benchmark_equity=None, ew_equity=None):
+                    metrics, benchmark_equity=None, ew_equity=None,
+                    high_df=None, low_df=None):
     """
     產出 AI 交易計畫 HTML 報表與資金曲線圖（v2 完整版）。
+
+    Parameters
+    ----------
+    high_df, low_df : pd.DataFrame, optional
+        最高/最低價矩陣，用於精確 ATR 計算（對齊回測引擎）。
     """
     print("📊 產出 AI 交易計畫與績效報表...")
 
@@ -142,6 +148,20 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     top_k = config.get('top_k', 3)
 
     total_ret = metrics['total_return'] * 100
+
+    # === 計算精確 ATR（與回測引擎同公式） ===
+    def _compute_display_atr(close_s, high_s=None, low_s=None, period=20):
+        """計算單檔股票的 ATR，對齊 EventDrivenBacktester._compute_atr"""
+        if high_s is not None and low_s is not None:
+            prev_close = close_s.shift(1)
+            tr1 = high_s - low_s
+            tr2 = (high_s - prev_close).abs()
+            tr3 = (low_s - prev_close).abs()
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        else:
+            # fallback: 用收盤價百分比變動
+            tr = close_s.pct_change().abs() * close_s
+        return tr.rolling(period).mean().iloc[-1]
 
     # === 繪製資金曲線（含 Benchmark） ===
     plt.style.use('dark_background')
@@ -211,58 +231,84 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
                 'total_return': t['Return_Pct'].sum() * 100,
             }
 
-    # === 今日交易計畫 ===
+    # === 今日交易計畫（嚴格對齊回測引擎的選股邏輯） ===
     latest_date = total_score.index[-1]
     today_scores = total_score.loc[latest_date].dropna().sort_values(ascending=False)
+    threshold = config.get('threshold', 2.0)
+    ma_period = 60  # 對齊回測中的 MA 期數
 
-    trading_plan_rows = ""
-    shown_count = 0
+    # Step 1: 篩選候選（score >= threshold + close > MA）
+    candidates = []
+    filtered_out = []
     for ticker, score in today_scores.items():
-        if shown_count >= 20:
-            break
-
         price = close_df[ticker].iloc[-1] if ticker in close_df.columns else np.nan
-        if pd.isna(price):
+        if pd.isna(price) or price <= 0:
             continue
 
-        # 趨勢過濾
-        ma_val = close_df[ticker].rolling(60).mean().iloc[-1] if ticker in close_df.columns else np.nan
+        ma_val = close_df[ticker].rolling(ma_period).mean().iloc[-1] if ticker in close_df.columns else np.nan
         above_ma = (not pd.isna(ma_val)) and (price > ma_val)
 
-        if score >= config.get('threshold', 2.0) and above_ma:
-            # 計算 TP/SL
-            if tp_sl_mode == 'atr':
-                # 用近似 ATR
-                recent = close_df[ticker].tail(21).pct_change().dropna()
-                atr_approx = recent.abs().mean() * price * 20  # 近似 20 日 ATR
-                if atr_approx > 0:
-                    tp_price = price + atr_approx * config.get('tp_atr_mult', 3.0)
-                    sl_price = price - atr_approx * config.get('sl_atr_mult', 1.5)
-                    tp_pct_display = (tp_price / price - 1) * 100
-                    sl_pct_display = (1 - sl_price / price) * 100
+        if score >= threshold and above_ma:
+            candidates.append((ticker, score, price))
+        elif score >= threshold:
+            filtered_out.append((ticker, score, price, '低於 MA'))
+        else:
+            filtered_out.append((ticker, score, price, '評分不足'))
+
+    # Step 2: 嚴格取 Top-K（對齊回測邏輯）
+    selected = candidates[:top_k]
+    not_selected = candidates[top_k:]
+
+    trading_plan_rows = ""
+
+    # 顯示 Top-K 建議買進
+    for rank, (ticker, score, price) in enumerate(selected, 1):
+        # 使用精確 ATR（與回測引擎同公式）
+        if tp_sl_mode == 'atr':
+            high_s = high_df[ticker] if (high_df is not None and ticker in high_df.columns) else None
+            low_s = low_df[ticker] if (low_df is not None and ticker in low_df.columns) else None
+            atr_val = _compute_display_atr(close_df[ticker], high_s, low_s)
+
+            if not pd.isna(atr_val) and atr_val > 0:
+                tp_price = price + atr_val * config.get('tp_atr_mult', 3.0)
+                sl_price = price - atr_val * config.get('sl_atr_mult', 2.0)
+                # Sanity checks
+                if sl_price <= 0:
+                    sl_price = price * 0.85  # fallback: -15%
+                tp_pct_display = (tp_price / price - 1) * 100
+                sl_pct_display = (1 - sl_price / price) * 100
+                # 合理性檢查
+                if tp_pct_display > 50 or sl_pct_display > 50:
+                    plan = '<span style="color:#ff4444">⚠️ ATR 異常，信號無效</span>'
                 else:
-                    tp_price = price * (1 + tp_pct)
-                    sl_price = price * (1 - sl_pct)
-                    tp_pct_display = tp_pct * 100
-                    sl_pct_display = sl_pct * 100
+                    time_exit = get_next_n_trading_days(latest_date, max_hold_days)
+                    plan = (f'<b>停利:</b> <span style="color:#00ff00">{tp_price:.1f}</span>'
+                            f' (+{tp_pct_display:.1f}%) '
+                            f'<br><b>停損:</b> <span style="color:#ff4444">{sl_price:.1f}</span>'
+                            f' (-{sl_pct_display:.1f}%) '
+                            f'<br><b>最晚出場:</b> {time_exit}')
             else:
                 tp_price = price * (1 + tp_pct)
                 sl_price = price * (1 - sl_pct)
-                tp_pct_display = tp_pct * 100
-                sl_pct_display = sl_pct * 100
-
-            time_exit = get_next_n_trading_days(latest_date, max_hold_days)
-            status = '<span style="color:#00ff00; font-weight:bold;">🟢 建議買進</span>'
-            plan = (f'<b>停利:</b> <span style="color:#00ff00">{tp_price:.1f}</span>'
-                    f' (+{tp_pct_display:.1f}%) '
-                    f'<br><b>停損:</b> <span style="color:#ff4444">{sl_price:.1f}</span>'
-                    f' (-{sl_pct_display:.1f}%) '
-                    f'<br><b>最晚出場:</b> {time_exit}')
+                time_exit = get_next_n_trading_days(latest_date, max_hold_days)
+                plan = (f'<b>停利:</b> <span style="color:#00ff00">{tp_price:.1f}</span>'
+                        f' (+{tp_pct*100:.1f}%) '
+                        f'<br><b>停損:</b> <span style="color:#ff4444">{sl_price:.1f}</span>'
+                        f' (-{sl_pct*100:.1f}%) '
+                        f'<br><b>最晚出場:</b> {time_exit}')
         else:
-            status = '<span style="color:#aaaaaa">⚪ 觀望</span>'
-            plan = "-"
+            tp_price = price * (1 + tp_pct)
+            sl_price = price * (1 - sl_pct)
+            time_exit = get_next_n_trading_days(latest_date, max_hold_days)
+            plan = (f'<b>停利:</b> <span style="color:#00ff00">{tp_price:.1f}</span>'
+                    f' (+{tp_pct*100:.1f}%) '
+                    f'<br><b>停損:</b> <span style="color:#ff4444">{sl_price:.1f}</span>'
+                    f' (-{sl_pct*100:.1f}%) '
+                    f'<br><b>最晚出場:</b> {time_exit}')
 
-        # Per-stock 歷史績效標籤
+        status = f'<span style="color:#00ff00; font-weight:bold;">🟢 建議買進 #{rank}</span>'
+
+        # Per-stock 歷史績效
         ss = stock_stats.get(ticker, None)
         if ss and ss['trades'] >= 2:
             wr_color = '#00ff00' if ss['win_rate'] >= 50 else '#ff4444'
@@ -282,7 +328,31 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
             f'<td>{price:.1f}</td><td>{status}</td><td>{plan}</td>'
             f'<td>{hist_badge}</td></tr>\n'
         )
-        shown_count += 1
+
+    # 顯示未被選入的候選（排名 > Top-K）
+    for ticker, score, price in not_selected[:5]:
+        status = '<span style="color:#ffab00">🟡 候選 (超出 Top-K)</span>'
+        ss = stock_stats.get(ticker, None)
+        hist_badge = '<span style="font-size:0.72rem; color:#555;">-</span>'
+        if ss and ss['trades'] >= 2:
+            wr_color = '#00ff00' if ss['win_rate'] >= 50 else '#ff4444'
+            hist_badge = f'<span style="font-size:0.72rem; color:#888;">勝率 <b style="color:{wr_color}">{ss["win_rate"]:.0f}%</b></span>'
+
+        trading_plan_rows += (
+            f'<tr style="opacity:0.6"><td>{ticker}</td><td>{score:.2f}</td>'
+            f'<td>{price:.1f}</td><td>{status}</td><td>-</td>'
+            f'<td>{hist_badge}</td></tr>\n'
+        )
+
+    # 顯示被過濾掉的（前 5 筆）
+    for ticker, score, price, reason in filtered_out[:5]:
+        status = f'<span style="color:#aaaaaa">⚪ 觀望 ({reason})</span>'
+        price_str = f'{price:.1f}' if not pd.isna(price) else '-'
+        trading_plan_rows += (
+            f'<tr style="opacity:0.4"><td>{ticker}</td><td>{score:.2f}</td>'
+            f'<td>{price_str}</td><td>{status}</td><td>-</td>'
+            f'<td>-</td></tr>\n'
+        )
 
     # === 歷史交易紀錄（最近 20 筆）===
     trade_history_rows = ""
@@ -911,7 +981,8 @@ def main():
         'sell_cost': args.sell_cost,
     }
     generate_report(trades_df, equity_df, total_score, close_df, config,
-                    metrics, benchmark_equity, ew_equity)
+                    metrics, benchmark_equity, ew_equity,
+                    high_df=high_df, low_df=low_df)
     print("\n🚀 全部完成！請打開 stock_report.html 查看結果。")
 
 

@@ -51,9 +51,18 @@ python ai_report.py --universe-size 100 \
                     --top-k 5 \
                     --tp-sl-mode atr \
                     --tp-atr 3.0 \
-                    --sl-atr 1.5 \
-                    --hold-days 20 \
+                    --sl-atr 2.0 \
+                    --hold-days 30 \
                     --days 800
+
+# 穩健模式（含大盤過濾）
+python ai_report.py --regime-filter
+
+# 壓力測試模式（含滑價 + 獲利保護）
+python ai_report.py --regime-filter --slippage 0.001 --breakeven 0.03
+
+# ML 因子加權模式
+python ai_report.py --regime-filter --ml-weights
 
 # 固定百分比 TP/SL 模式
 python ai_report.py --tp-sl-mode fixed --tp 0.15 --sl 0.08
@@ -74,17 +83,28 @@ python ai_report.py --help
 | `--tickers` | 擴展池 | 手動指定股池（配合 --static-pool） |
 | `--tp-sl-mode` | `atr` | TP/SL 模式：`atr` 或 `fixed` |
 | `--tp-atr` | `3.0` | ATR 停利倍數 |
-| `--sl-atr` | `1.5` | ATR 停損倍數 |
+| `--sl-atr` | `2.0` | ATR 停損倍數 |
 | `--tp` | `0.15` | 固定模式停利百分比 |
 | `--sl` | `0.08` | 固定模式停損百分比 |
 | `--top-k` | `3` | 每日最多進場股票數 |
 | `--threshold` | `2.0` | AI 評分安全下限 |
-| `--hold-days` | `20` | 最大持倉交易日 |
+| `--hold-days` | `30` | 最大持倉交易日 |
 | `--capital` | `1000000` | 初始模擬資金 |
 | `--position-size` | `0.10` | 每筆倉位佔當前權益比例 |
 | `--buy-cost` | `0.001425` | 買入手續費率 (0.1425%) |
 | `--sell-cost` | `0.004425` | 賣出成本率 (0.1425% + 0.3% 稅) |
 | `--days` | `800` | 歷史回測天數 |
+| `--regime-filter` | `false` | 大盤過濾 (0050 > 60MA 才進場) |
+| `--gap-filter` | `0` | 跳空過濾 ATR 倍數 |
+| `--volume-confirm` | `false` | 成交量確認 (量 > 20日均量) |
+| `--blacklist` | `0` | 動態黑名單回顧筆數 |
+| `--breakeven` | `0` | 獲利保護觸發門檻 (0.03=+3%) |
+| `--slippage` | `0` | 滑價模型 (0.001=0.1%) |
+| `--vol-parity` | `false` | 波動率平價部位調整 |
+| `--multi-ma` | `false` | 多均線確認 (20MA > 60MA) |
+| `--ml-weights` | `false` | LightGBM 因子加權 |
+| `--trailing` | `false` | 移動停利 (Trailing Stop) |
+| `--trailing-atr` | `2.0` | 移動停利 ATR 倍數 |
 
 ## AI 四維度排名指標
 
@@ -99,9 +119,10 @@ python ai_report.py --help
 ## 策略紀律
 
 - **ATR 自適應盈虧比**：TP/SL 隨波動度調整，對不同標的更公平
-- **不抱死魚股**：持有滿 20 個交易日強制出場，釋放資金
+- **不抱死魚股**：持有滿 30 個交易日強制出場，釋放資金
 - **資金控管**：每次進場投入**當前權益** 10%，最多同時持有 10 檔
 - **含交易成本**：買 0.1425% 手續費 + 賣 0.1425% 手續費 + 0.3% 證交稅
+- **執行單對齊**：單日執行單嚴格取 Top-K，不顯示候選池以外的股票
 
 ## 專案結構
 
