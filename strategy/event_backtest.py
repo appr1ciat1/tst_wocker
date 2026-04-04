@@ -68,6 +68,12 @@ class EventDrivenBacktester:
         滑價模型（預設 0 = 停用，0.001 = 0.1%），進出場額外執行成本
     vol_parity : bool
         啟用波動率平價 (Volatility Parity) 部位調整，取代固定比例
+    mean_reversion : bool
+        啟用均值回歸子策略（大盤 < 60MA 時，買入超跌反彈股）
+    dynamic_risk : bool
+        啟用動態風險預算（根據近 20 日 realized vol 調整 position size）
+    futures_hedge : bool
+        啟用台指期空單對沖（大盤 < 60MA 時，模擬空單保護部位）
     buy_cost : float
         買進手續費率（預設 0.001425 = 0.1425%）
     sell_cost : float
@@ -82,6 +88,8 @@ class EventDrivenBacktester:
                  volume_confirm=False,
                  blacklist_lookback=0, blacklist_min_wr=0.25,
                  breakeven_pct=0, slippage=0, vol_parity=False,
+                 mean_reversion=False, dynamic_risk=False,
+                 futures_hedge=False,
                  buy_cost=0.001425, sell_cost=0.004425):
         self.tp_pct = tp_pct
         self.sl_pct = sl_pct
@@ -101,6 +109,9 @@ class EventDrivenBacktester:
         self.breakeven_pct = breakeven_pct
         self.slippage = slippage
         self.vol_parity = vol_parity
+        self.mean_reversion = mean_reversion
+        self.dynamic_risk = dynamic_risk
+        self.futures_hedge = futures_hedge
         self.buy_cost = buy_cost
         self.sell_cost = sell_cost
 
@@ -179,6 +190,12 @@ class EventDrivenBacktester:
             filters.append('VolConfirm')
         if self.blacklist_lookback > 0:
             filters.append(f'Blacklist({self.blacklist_lookback})')
+        if self.mean_reversion:
+            filters.append('MeanRev')
+        if self.dynamic_risk:
+            filters.append('DynRisk')
+        if self.futures_hedge:
+            filters.append('FutHedge')
         filter_desc = f" Filters: {'+'.join(filters)}" if filters else ""
         cost_desc = f"買 {self.buy_cost*100:.3f}% 賣 {self.sell_cost*100:.3f}%"
 
@@ -214,6 +231,26 @@ class EventDrivenBacktester:
         active_trades = {}  # ticker -> trade_info
         max_positions = int(1.0 / self.position_size)  # 最多同時持有
         ticker_history = {}  # ticker -> list of recent Return_Pct (for blacklist)
+
+        # === 動態風險預算：預計算市場 realized vol ===
+        market_daily_ret = None
+        if self.dynamic_risk and market_close is not None:
+            market_daily_ret = market_close.pct_change()
+
+        # === 台指期對沖追蹤 ===
+        hedge_active = False
+        hedge_entry_price = 0.0
+        hedge_pnl_total = 0.0
+
+        # === 均值回歸：計算超跌指標（RSI-like） ===
+        if self.mean_reversion:
+            delta = close_df.diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = (-delta.clip(upper=0)).rolling(14).mean()
+            rs = gain / (loss + 1e-8)
+            rsi_14 = 100 - (100 / (1 + rs))
+            # 5 日跌幅
+            ret_5d = close_df / close_df.shift(5) - 1
 
         # 從第 60 天開始（確保技術指標已穩定）
         for i in range(60, len(dates)):
@@ -335,11 +372,11 @@ class EventDrivenBacktester:
 
                 candidates = []
                 if regime_ok:
+                    # ── 動量策略（正常模式） ──
                     for ticker in close_df.columns:
                         if ticker in active_trades:
                             continue
 
-                        # ── Blacklist：最近 N 筆勝率太低則跳過 ──
                         if self.blacklist_lookback > 0 and ticker in ticker_history:
                             recent = ticker_history[ticker][-self.blacklist_lookback:]
                             if len(recent) >= self.blacklist_lookback:
@@ -350,20 +387,16 @@ class EventDrivenBacktester:
                         score = total_score[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
                         ma = ma_60[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
                         prev_close = close_df[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
-                        entry_price = open_df[ticker].iloc[i]  # v2: 用今日 open 進場
+                        entry_price = open_df[ticker].iloc[i]
 
                         if pd.isna(entry_price) or pd.isna(score) or pd.isna(ma):
                             continue
                         if pd.isna(prev_close) or entry_price <= 0:
                             continue
 
-                        # 進場條件：
-                        # 1. 昨日 AI 評分 >= 安全下限
-                        # 2. 昨日收盤價 > 60MA（多頭趨勢確認）
                         if not (score >= threshold and prev_close > ma):
                             continue
 
-                        # ── Gap Filter：open 跳空太大則跳過 ──
                         if self.gap_filter_atr > 0 and atr is not None:
                             atr_val = atr[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
                             if not pd.isna(atr_val) and atr_val > 0:
@@ -371,7 +404,6 @@ class EventDrivenBacktester:
                                 if gap > self.gap_filter_atr * atr_val:
                                     continue
 
-                        # ── Volume Confirmation：成交量 > 20 日均量 ──
                         if vol_ma20 is not None and ticker in vol_df.columns:
                             today_vol = vol_df[ticker].iloc[i] if i < len(vol_df) else np.nan
                             avg_vol = vol_ma20[ticker].iloc[i] if i < len(vol_ma20) else np.nan
@@ -380,6 +412,52 @@ class EventDrivenBacktester:
                                     continue
 
                         candidates.append((ticker, score, entry_price))
+
+                elif self.mean_reversion and not regime_ok:
+                    # ── 均值回歸子策略（熊市模式） ──
+                    # 大盤 < 60MA 時，找超跌反彈股：RSI<30 且 5 日跌幅 > 10%
+                    for ticker in close_df.columns:
+                        if ticker in active_trades:
+                            continue
+                        entry_price = open_df[ticker].iloc[i]
+                        prev_close = close_df[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+                        if pd.isna(entry_price) or pd.isna(prev_close) or entry_price <= 0:
+                            continue
+
+                        ticker_rsi = rsi_14[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+                        ticker_ret5 = ret_5d[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+                        ma = ma_60[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+
+                        if pd.isna(ticker_rsi) or pd.isna(ticker_ret5) or pd.isna(ma):
+                            continue
+
+                        # 反轉條件：RSI < 30 且 5 日跌超過 10%
+                        if ticker_rsi < 30 and ticker_ret5 < -0.10:
+                            # 反轉分數：RSI 越低越好
+                            rev_score = (30 - ticker_rsi) + abs(ticker_ret5) * 100
+                            candidates.append((ticker, rev_score, entry_price))
+
+                # === 台指期對沖：大盤 < 60MA 時開空單 ===
+                if self.futures_hedge and market_ma60 is not None:
+                    try:
+                        mkt_date = market_close.index.get_indexer([date], method='ffill')[0]
+                        if mkt_date >= 0:
+                            mkt_val = market_close.iloc[mkt_date]
+                            mkt_ma = market_ma60.iloc[mkt_date]
+                            if not pd.isna(mkt_val) and not pd.isna(mkt_ma):
+                                if mkt_val < mkt_ma and not hedge_active:
+                                    # 開空單（模擬：用 10% 權益做空大盤）
+                                    hedge_active = True
+                                    hedge_entry_price = mkt_val
+                                elif mkt_val >= mkt_ma and hedge_active:
+                                    # 平空單
+                                    hedge_return = (hedge_entry_price / mkt_val) - 1
+                                    hedge_pnl = current_equity * 0.10 * hedge_return
+                                    capital += hedge_pnl
+                                    hedge_pnl_total += hedge_pnl
+                                    hedge_active = False
+                    except Exception:
+                        pass
 
                 # Top-K 選股：按分數排序，取前 top_k 名
                 candidates.sort(key=lambda x: x[1], reverse=True)
@@ -390,20 +468,32 @@ class EventDrivenBacktester:
                     # 滑價模型：買入時價格略高
                     actual_entry = entry_price * (1 + self.slippage)
 
-                    # Volatility Parity 或 固定比例 sizing
+                    # === 動態風險預算：根據近期 realized vol 調整 position size ===
+                    effective_pos_size = self.position_size
+                    if self.dynamic_risk and market_daily_ret is not None:
+                        try:
+                            mkt_idx = market_close.index.get_indexer([date], method='ffill')[0]
+                            if mkt_idx >= 20:
+                                recent_vol = market_daily_ret.iloc[mkt_idx-20:mkt_idx].std()
+                                target_vol = 0.01  # 目標日波動 1%
+                                if not pd.isna(recent_vol) and recent_vol > 0:
+                                    vol_scalar = min(2.0, max(0.3, target_vol / recent_vol))
+                                    effective_pos_size = self.position_size * vol_scalar
+                        except Exception:
+                            pass
+
+                    # Volatility Parity 或 固定/動態比例 sizing
                     if self.vol_parity and atr is not None:
                         atr_val_sizing = atr[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
                         if not pd.isna(atr_val_sizing) and atr_val_sizing > 0:
-                            # 目標：每筆交易的 ATR 風險貼現值 = 固定比例的權益
-                            target_risk = current_equity * self.position_size
-                            # 部位 = 目標風險 / (ATR × SL 倍數)
+                            target_risk = current_equity * effective_pos_size
                             risk_per_share = atr_val_sizing * self.sl_atr_mult
                             shares = target_risk / risk_per_share if risk_per_share > 0 else 0
                             trade_amount = shares * actual_entry
                         else:
-                            trade_amount = current_equity * self.position_size
+                            trade_amount = current_equity * effective_pos_size
                     else:
-                        trade_amount = current_equity * self.position_size
+                        trade_amount = current_equity * effective_pos_size
 
                     actual_cost = trade_amount * (1 + self.buy_cost)  # 含買入手續費
 
@@ -458,10 +548,13 @@ class EventDrivenBacktester:
             wins = len(trades_df[trades_df['Return_Pct'] > 0])
             total = len(trades_df)
             total_cost_impact = (self.buy_cost + self.sell_cost) * total
-            print(f"   ✅ 回測完成：共 {total} 筆交易，"
-                  f"勝率 {wins/total*100:.1f}%，"
-                  f"平均報酬 {trades_df['Return_Pct'].mean()*100:.2f}% "
-                  f"(含成本 ~{(self.buy_cost+self.sell_cost)*100:.2f}%/筆)")
+            summary = (f"   ✅ 回測完成：共 {total} 筆交易，"
+                       f"勝率 {wins/total*100:.1f}%，"
+                       f"平均報酬 {trades_df['Return_Pct'].mean()*100:.2f}% "
+                       f"(含成本 ~{(self.buy_cost+self.sell_cost)*100:.2f}%/筆)")
+            if self.futures_hedge and hedge_pnl_total != 0:
+                summary += f" [期貨對沖損益: {hedge_pnl_total:+,.0f}]"
+            print(summary)
         else:
             print("   ⚠️  回測完成但無任何交易觸發")
 

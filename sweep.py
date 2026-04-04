@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""
+季度自動重新校準腳本 (Quarterly Auto-Recalibration)
+
+每季度掃描核心參數，確認當前配置仍為最優。
+若發現更優配置，輸出建議（但不自動修改）。
+
+使用方式:
+  python sweep.py                # 完整掃描
+  python sweep.py --quick        # 快速掃描（核心參數）
+  python sweep.py --output log   # 輸出結果到 sweep_log.csv
+"""
+
+import subprocess
+import re
+import sys
+import csv
+from datetime import datetime
+from itertools import product
+
+
+def run_backtest(args_str):
+    """Run ai_report.py with given args and extract metrics."""
+    cmd = f'python ai_report.py {args_str}'
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=180)
+    out = r.stdout + r.stderr
+
+    def get(pattern, default=0):
+        m = re.search(pattern, out)
+        return float(m.group(1)) if m else default
+
+    return {
+        'ann': get(r'年化報酬率:\s+([\+\-\d\.]+)%'),
+        'sharpe': get(r'Sharpe Ratio:\s+([\+\-\d\.]+)'),
+        'sortino': get(r'Sortino Ratio:\s+([\+\-\d\.]+)'),
+        'calmar': get(r'Calmar Ratio:\s+([\+\-\d\.]+)'),
+        'mdd': get(r'最大回撤:\s+([\+\-\d\.]+)%'),
+        'trades': int(get(r'共 (\d+) 筆交易')),
+        'win_rate': get(r'勝率\s*([\d\.]+)%'),
+        'pf': get(r'Profit Factor:\s+([\d\.]+)'),
+    }
+
+
+def full_sweep():
+    """Full parameter sweep: ~40 configs."""
+    configs = []
+
+    # Core parameters to sweep
+    tp_atrs = [3.5, 4.0, 4.5]
+    sl_atrs = [2.5, 3.0, 3.5]
+    hold_days = [15, 20, 25, 30]
+    top_ks = [4, 5, 6]
+    gap_filters = [1.0, 1.5, 2.0]
+
+    # Only sweep 1-2 params at a time (avoid combinatorial explosion)
+    # Phase 1: hold_days × top_k
+    for hd, k in product(hold_days, top_ks):
+        configs.append((
+            f'hold={hd}+k={k}',
+            f'--hold-days {hd} --top-k {k}'
+        ))
+
+    # Phase 2: tp × sl (with best hold/k)
+    for tp, sl in product(tp_atrs, sl_atrs):
+        configs.append((
+            f'tp={tp}+sl={sl}',
+            f'--tp-atr {tp} --sl-atr {sl}'
+        ))
+
+    # Phase 3: gap filter
+    for gf in gap_filters:
+        configs.append((f'gap={gf}', f'--gap-filter {gf}'))
+
+    # Phase 4: structural features
+    configs.extend([
+        ('mean-rev', '--mean-reversion'),
+        ('dyn-risk', '--dynamic-risk'),
+        ('fut-hedge', '--futures-hedge'),
+        ('all-struct', '--mean-reversion --dynamic-risk --futures-hedge'),
+    ])
+
+    return configs
+
+
+def quick_sweep():
+    """Quick parameter sweep: ~15 configs."""
+    return [
+        ('baseline', ''),
+        ('hold=15', '--hold-days 15'),
+        ('hold=20', '--hold-days 20'),
+        ('hold=25', '--hold-days 25'),
+        ('hold=30', '--hold-days 30'),
+        ('k=4', '--top-k 4'),
+        ('k=5', '--top-k 5'),
+        ('k=6', '--top-k 6'),
+        ('tp=3.5', '--tp-atr 3.5'),
+        ('tp=4.5', '--tp-atr 4.5'),
+        ('sl=2.5', '--sl-atr 2.5'),
+        ('sl=3.5', '--sl-atr 3.5'),
+        ('mean-rev', '--mean-reversion'),
+        ('dyn-risk', '--dynamic-risk'),
+        ('fut-hedge', '--futures-hedge'),
+    ]
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='季度參數重新校準')
+    parser.add_argument('--quick', action='store_true', help='快速掃描')
+    parser.add_argument('--output', choices=['log', 'csv'], help='輸出格式')
+    args = parser.parse_args()
+
+    configs = quick_sweep() if args.quick else full_sweep()
+
+    print(f"🔄 季度重新校準 — {datetime.now().strftime('%Y-%m-%d')}")
+    print(f"   掃描 {len(configs)} 組配置...")
+    print()
+
+    results = []
+    total = len(configs)
+    for idx, (name, cmd_args) in enumerate(configs):
+        sys.stderr.write(f'[{idx+1}/{total}] {name}...\n')
+        sys.stderr.flush()
+        try:
+            metrics = run_backtest(cmd_args)
+            metrics['name'] = name
+            metrics['args'] = cmd_args
+            results.append(metrics)
+        except Exception as e:
+            print(f'   ⚠️ {name} failed: {e}')
+
+    # Sort by Sharpe
+    results.sort(key=lambda x: x['sharpe'], reverse=True)
+
+    # Print results
+    header = f"{'Config':<24s} | {'Ann':>7s} | {'Sharpe':>6s} | {'Sort':>5s} | {'Calmar':>6s} | {'MDD':>7s} | {'#Tr':>4s} | {'WR':>5s} | {'PF':>4s}"
+    sep = '-' * len(header)
+    print(header)
+    print(sep)
+
+    baseline_sharpe = None
+    for r in results:
+        if r['name'] == 'baseline' or (baseline_sharpe is None and r['args'] == ''):
+            baseline_sharpe = r['sharpe']
+            marker = ' ⭐'
+        elif r['sharpe'] > (baseline_sharpe or 0):
+            marker = ' 🆕'
+        else:
+            marker = ''
+        print(f"{r['name']:<24s} | {r['ann']:>+6.1f}% | {r['sharpe']:>6.3f} | {r['sortino']:>5.2f} | "
+              f"{r['calmar']:>6.3f} | {r['mdd']:>6.1f}% | {r['trades']:>4d} | {r['win_rate']:>4.1f}% | {r['pf']:>4.2f}{marker}")
+
+    # Summary
+    print(sep)
+    best = results[0]
+    if baseline_sharpe and best['sharpe'] > baseline_sharpe * 1.02:
+        print(f"\n⚠️  發現更優配置: {best['name']} (Sharpe {best['sharpe']:.3f} vs baseline {baseline_sharpe:.3f})")
+        print(f"   建議命令: python ai_report.py {best['args']}")
+    else:
+        print(f"\n✅ 當前配置仍為最優或差異 < 2%")
+
+    # CSV output
+    if args.output in ('log', 'csv'):
+        filename = f"sweep_log_{datetime.now().strftime('%Y%m%d')}.csv"
+        with open(filename, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['name', 'args', 'ann', 'sharpe', 'sortino',
+                                                    'calmar', 'mdd', 'trades', 'win_rate', 'pf'])
+            writer.writeheader()
+            writer.writerows(results)
+        print(f"📄 結果已儲存至 {filename}")
+
+
+if __name__ == '__main__':
+    main()

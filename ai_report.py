@@ -874,6 +874,20 @@ def parse_args():
         help='歷史回測天數 (預設: 1200)'
     )
 
+    # 結構性功能
+    parser.add_argument(
+        '--mean-reversion', action='store_true',
+        help='啟用均值回歸子策略（熊市時買入超跌反彈股）'
+    )
+    parser.add_argument(
+        '--dynamic-risk', action='store_true',
+        help='啟用動態風險預算（根據市場波動調整部位）'
+    )
+    parser.add_argument(
+        '--futures-hedge', action='store_true',
+        help='啟用台指期空單對沖（熊市時模擬做空大盤）'
+    )
+
     return parser.parse_args()
 
 
@@ -948,6 +962,9 @@ def main():
         breakeven_pct=args.breakeven,
         slippage=args.slippage,
         vol_parity=args.vol_parity,
+        mean_reversion=args.mean_reversion,
+        dynamic_risk=args.dynamic_risk,
+        futures_hedge=args.futures_hedge,
         buy_cost=args.buy_cost,
         sell_cost=args.sell_cost,
     )
