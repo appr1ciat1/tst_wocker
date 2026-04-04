@@ -1,4 +1,4 @@
-name: AI Quant Trading Report v2
+name: AI Quant Trading Report v2.1
 
 on:
   schedule:
@@ -11,25 +11,33 @@ on:
         required: false
         default: 'atr'
       tp_atr:
-        description: 'ATR 模式停利倍數'
+        description: 'ATR 停利倍數'
         required: false
         default: '3.0'
       sl_atr:
-        description: 'ATR 模式停損倍數'
+        description: 'ATR 停損倍數'
         required: false
-        default: '1.5'
+        default: '2.0'
       hold_days:
         description: '最大持倉天數'
         required: false
-        default: '20'
+        default: '30'
       top_k:
         description: '每日最多進場股票數'
         required: false
-        default: '3'
+        default: '5'
       universe_size:
         description: '動態 Universe 大小'
         required: false
         default: '50'
+      regime_filter:
+        description: '啟用大盤過濾 (0050 > 60MA)'
+        required: false
+        default: 'true'
+      days:
+        description: '回測天數'
+        required: false
+        default: '1200'
 
 jobs:
   generate-report:
@@ -47,21 +55,31 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run AI Quant Pipeline v2
+      - name: Run AI Quant Pipeline v2.1
         run: |
           TP_SL_MODE=${{ github.event.inputs.tp_sl_mode || 'atr' }}
           TP_ATR=${{ github.event.inputs.tp_atr || '3.0' }}
-          SL_ATR=${{ github.event.inputs.sl_atr || '1.5' }}
-          HOLD=${{ github.event.inputs.hold_days || '20' }}
-          TOP_K=${{ github.event.inputs.top_k || '3' }}
+          SL_ATR=${{ github.event.inputs.sl_atr || '2.0' }}
+          HOLD=${{ github.event.inputs.hold_days || '30' }}
+          TOP_K=${{ github.event.inputs.top_k || '5' }}
           UNIV=${{ github.event.inputs.universe_size || '50' }}
+          DAYS=${{ github.event.inputs.days || '1200' }}
+          REGIME=${{ github.event.inputs.regime_filter || 'true' }}
+
+          REGIME_FLAG=""
+          if [ "$REGIME" = "true" ]; then
+            REGIME_FLAG="--regime-filter"
+          fi
+
           python ai_report.py \
             --tp-sl-mode $TP_SL_MODE \
             --tp-atr $TP_ATR \
             --sl-atr $SL_ATR \
             --hold-days $HOLD \
             --top-k $TOP_K \
-            --universe-size $UNIV
+            --universe-size $UNIV \
+            --days $DAYS \
+            $REGIME_FLAG
 
       - name: Cleanup old artifacts (keep last 180 days)
         run: |
@@ -75,5 +93,5 @@ jobs:
           git config --global user.email "voidful.stack@gmail.com"
           git config --global user.name "Voidful"
           git add -A
-          git commit -m "📊 AI Trading Report v2 ($(date -u '+%Y-%m-%d'))" || echo "No changes to commit"
+          git commit -m "📊 AI Trading Report v2.1 ($(date -u '+%Y-%m-%d'))" || echo "No changes to commit"
           git push origin main
