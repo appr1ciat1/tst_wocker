@@ -788,8 +788,8 @@ def parse_args():
 
     # 選股
     parser.add_argument(
-        '--top-k', type=int, default=5,
-        help='每日最多進場股票數 (預設: 5)'
+        '--top-k', type=int, default=6,
+        help='每日最多進場股票數 (預設: 6)'
     )
     parser.add_argument(
         '--threshold', type=float, default=2.0,

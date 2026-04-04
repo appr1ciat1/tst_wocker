@@ -25,7 +25,7 @@ on:
       top_k:
         description: '每日最多進場股票數'
         required: false
-        default: '5'
+        default: '6'
       universe_size:
         description: '動態 Universe 大小'
         required: false
