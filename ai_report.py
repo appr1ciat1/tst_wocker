@@ -320,6 +320,76 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     sharpe_color = "#00ff00" if m['sharpe'] > 0.5 else ("#ffab00" if m['sharpe'] > 0 else "#ff4444")
     dd_color = "#ff4444" if m['max_drawdown_pct'] < -0.15 else "#ffab00"
 
+    # === Benchmark 數值比較 ===
+    benchmark_stats_html = ""
+    if benchmark_equity is not None and len(benchmark_equity) > 20:
+        try:
+            from strategy.risk_metrics import compute_risk_metrics as _crm
+            bench_eq = pd.DataFrame({'Equity': benchmark_equity * initial_capital},
+                                    index=benchmark_equity.index)
+            bench_m = _crm(bench_eq, pd.DataFrame(), initial_capital)
+            bm_ann = bench_m['ann_return'] * 100
+            bm_vol = bench_m['ann_volatility'] * 100
+            bm_mdd = bench_m['max_drawdown_pct'] * 100
+            bm_sharpe = bench_m['sharpe']
+            excess_ret = m['ann_return'] * 100 - bm_ann
+            excess_color = "#00ff00" if excess_ret > 0 else "#ff4444"
+            benchmark_stats_html = f"""
+    <div class="stats">
+        <div class="stat-card benchmark">
+            <div class="label">0050 年化報酬</div>
+            <div class="value">{bm_ann:+.1f}%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 最大回撤</div>
+            <div class="value">{bm_mdd:.1f}%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 Sharpe</div>
+            <div class="value">{bm_sharpe:.2f}</div>
+        </div>
+        <div class="stat-card" style="border-left-color:{excess_color}">
+            <div class="label">超額年化報酬 (α)</div>
+            <div class="value" style="color:{excess_color}">{excess_ret:+.1f}%</div>
+        </div>
+    </div>"""
+        except Exception:
+            pass
+
+    # === 月度報酬熱圖 ===
+    monthly_heatmap_html = ""
+    if not trades_df.empty:
+        try:
+            eq = equity_df['Equity']
+            monthly_ret = eq.resample('ME').last().pct_change().dropna()
+            rows_html = ""
+            for dt, ret in monthly_ret.items():
+                ret_pct = ret * 100
+                # 顏色映射：紅(-10%) → 黃(0%) → 綠(+10%)
+                if ret_pct >= 0:
+                    intensity = min(ret_pct / 10, 1.0)
+                    bg = f"rgba(0,255,0,{intensity * 0.3:.2f})"
+                    color = "#00ff00"
+                else:
+                    intensity = min(abs(ret_pct) / 10, 1.0)
+                    bg = f"rgba(255,68,68,{intensity * 0.3:.2f})"
+                    color = "#ff4444"
+                rows_html += (
+                    f'<tr style="background:{bg}">'
+                    f'<td>{dt.strftime("%Y-%m")}</td>'
+                    f'<td style="color:{color}; font-weight:bold">{ret_pct:+.1f}%</td>'
+                    f'</tr>\n'
+                )
+            monthly_heatmap_html = f"""
+    <table style="max-width:400px">
+        <thead><tr><th>月份</th><th>月報酬</th></tr></thead>
+        <tbody>
+{rows_html}
+        </tbody>
+    </table>"""
+        except Exception:
+            pass
+
     # === 產出 HTML ===
     report_date = latest_date.strftime('%Y-%m-%d')
     cost_desc = f"買 {config.get('buy_cost', 0.001425)*100:.3f}% + 賣 {config.get('sell_cost', 0.004425)*100:.3f}%"
@@ -533,6 +603,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     </table>
 
     <h2>📈 資金曲線 vs Benchmark</h2>
+{benchmark_stats_html}
     <img src="backtest_chart.png" alt="AI Quantitative Backtest Equity Curve with Benchmark">
 
     <h2>📋 出場原因分布統計</h2>
@@ -556,6 +627,9 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 {trade_history_rows}
         </tbody>
     </table>
+
+    <h2>📅 月度報酬熱圖</h2>
+{monthly_heatmap_html}
 
     <div class="disclaimer">
         ⚠️ <b>免責聲明：</b>本報表由 AI 量化模型自動產出，僅供學術研究與技術交流之用，
@@ -675,6 +749,30 @@ def parse_args():
         '--blacklist', type=int, default=0,
         help='動態黑名單回顧筆數 (預設: 0=停用, 10=最近10筆勝率<25%%則排除)'
     )
+    parser.add_argument(
+        '--breakeven', type=float, default=0,
+        help='獲利保護觸發門檻 (預設: 0=停用, 0.03=+3%%後 SL 移至成本價)'
+    )
+    parser.add_argument(
+        '--slippage', type=float, default=0,
+        help='滑價模型 (預設: 0=停用, 0.001=0.1%%額外執行成本)'
+    )
+    parser.add_argument(
+        '--vol-parity', action='store_true',
+        help='啟用波動率平價 (Volatility Parity) 部位調整'
+    )
+    parser.add_argument(
+        '--multi-ma', action='store_true',
+        help='啟用多均線確認 (20MA > 60MA 才允許進場)'
+    )
+    parser.add_argument(
+        '--ma-period', type=int, default=60,
+        help='主趨勢均線天數 (預設: 60)'
+    )
+    parser.add_argument(
+        '--ml-weights', action='store_true',
+        help='啟用 LightGBM 因子加權 (取代等權加總)'
+    )
 
     # 資金
     parser.add_argument(
@@ -742,7 +840,12 @@ def main():
         universe_mask = None
 
     # Phase 3: 特徵工程
-    total_score, ma_60, atr_df = engineer_features(close_df, vol_df, universe_mask)
+    total_score, ma_60, atr_df, short_ma = engineer_features(
+        close_df, vol_df, universe_mask,
+        ma_period=args.ma_period,
+        multi_ma=args.multi_ma,
+        ml_weights=args.ml_weights,
+    )
 
     # Phase 3.5: 提前下載 0050 用於 regime filter
     market_close = None
@@ -750,7 +853,7 @@ def main():
         print("\n📊 下載大盤指數 (0050) 用於 regime filter...")
         bench_raw = fetch_benchmark('0050', days=args.days)
         if len(bench_raw) > 0:
-            market_close = bench_raw * bench_raw.iloc[0]  # 還原為原始價格
+            market_close = bench_raw * bench_raw.iloc[0]
 
     # Phase 4: 事件驅動回測
     backtester = EventDrivenBacktester(
@@ -768,6 +871,9 @@ def main():
         gap_filter_atr=args.gap_filter,
         volume_confirm=args.volume_confirm,
         blacklist_lookback=args.blacklist,
+        breakeven_pct=args.breakeven,
+        slippage=args.slippage,
+        vol_parity=args.vol_parity,
         buy_cost=args.buy_cost,
         sell_cost=args.sell_cost,
     )

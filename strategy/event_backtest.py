@@ -62,6 +62,12 @@ class EventDrivenBacktester:
         動態黑名單回顧筆數（最近 N 筆交易勝率低於 min_wr 則暫時排除），0 = 停用
     blacklist_min_wr : float
         黑名單勝率門檻（預設 0.25 = 25%）
+    breakeven_pct : float
+        獲利保護觸發門檻（預設 0 = 停用，0.03 = +3%），達到此獲利後將 SL 移至成本價
+    slippage : float
+        滑價模型（預設 0 = 停用，0.001 = 0.1%），進出場額外執行成本
+    vol_parity : bool
+        啟用波動率平價 (Volatility Parity) 部位調整，取代固定比例
     buy_cost : float
         買進手續費率（預設 0.001425 = 0.1425%）
     sell_cost : float
@@ -75,6 +81,7 @@ class EventDrivenBacktester:
                  regime_filter=False, gap_filter_atr=0,
                  volume_confirm=False,
                  blacklist_lookback=0, blacklist_min_wr=0.25,
+                 breakeven_pct=0, slippage=0, vol_parity=False,
                  buy_cost=0.001425, sell_cost=0.004425):
         self.tp_pct = tp_pct
         self.sl_pct = sl_pct
@@ -91,6 +98,9 @@ class EventDrivenBacktester:
         self.volume_confirm = volume_confirm
         self.blacklist_lookback = blacklist_lookback
         self.blacklist_min_wr = blacklist_min_wr
+        self.breakeven_pct = breakeven_pct
+        self.slippage = slippage
+        self.vol_parity = vol_parity
         self.buy_cost = buy_cost
         self.sell_cost = sell_cost
 
@@ -234,6 +244,15 @@ class EventDrivenBacktester:
                         # trailing SL 只能往上調，不能往下
                         trade['sl_price'] = max(trade['sl_price'], trailing_sl)
 
+                    # ── Breakeven Stop：獲利超過 breakeven_pct 後將 SL 移至成本價 ──
+                    if (self.breakeven_pct > 0
+                            and not trade.get('breakeven_activated', False)):
+                        unrealized = (current_high / trade['entry_price']) - 1
+                        if unrealized >= self.breakeven_pct:
+                            be_price = trade['entry_price']  # 成本價
+                            trade['sl_price'] = max(trade['sl_price'], be_price)
+                            trade['breakeven_activated'] = True
+
                 exit_triggered = False
                 exit_price = 0
                 exit_reason = ""
@@ -259,8 +278,9 @@ class EventDrivenBacktester:
                     exit_reason = "⚪ 時間到期"
 
                 if exit_triggered:
-                    # 扣除賣出成本
-                    revenue = trade['shares'] * exit_price * (1 - self.sell_cost)
+                    # 扣除賣出成本 + 滑價
+                    exit_price_with_slippage = exit_price * (1 - self.slippage)
+                    revenue = trade['shares'] * exit_price_with_slippage * (1 - self.sell_cost)
                     capital += revenue
 
                     # 計算含成本的真實報酬
@@ -367,12 +387,28 @@ class EventDrivenBacktester:
                 selected = candidates[:min(top_k, slots_available)]
 
                 for ticker, score, entry_price in selected:
-                    # Equity-based position sizing
-                    trade_amount = current_equity * self.position_size
+                    # 滑價模型：買入時價格略高
+                    actual_entry = entry_price * (1 + self.slippage)
+
+                    # Volatility Parity 或 固定比例 sizing
+                    if self.vol_parity and atr is not None:
+                        atr_val_sizing = atr[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+                        if not pd.isna(atr_val_sizing) and atr_val_sizing > 0:
+                            # 目標：每筆交易的 ATR 風險貼現值 = 固定比例的權益
+                            target_risk = current_equity * self.position_size
+                            # 部位 = 目標風險 / (ATR × SL 倍數)
+                            risk_per_share = atr_val_sizing * self.sl_atr_mult
+                            shares = target_risk / risk_per_share if risk_per_share > 0 else 0
+                            trade_amount = shares * actual_entry
+                        else:
+                            trade_amount = current_equity * self.position_size
+                    else:
+                        trade_amount = current_equity * self.position_size
+
                     actual_cost = trade_amount * (1 + self.buy_cost)  # 含買入手續費
 
                     if capital >= actual_cost:
-                        shares = trade_amount / entry_price
+                        shares = trade_amount / actual_entry
                         capital -= actual_cost
 
                         # 計算 TP/SL 價格
@@ -391,12 +427,13 @@ class EventDrivenBacktester:
 
                         active_trades[ticker] = {
                             'shares': shares,
-                            'entry_price': entry_price,
+                            'entry_price': actual_entry,
                             'entry_date': date,
                             'tp_price': tp_price,
                             'sl_price': sl_price,
-                            'initial_sl_price': sl_price,  # 保存初始 SL 用於區分出場原因
-                            'highest_since_entry': entry_price,  # trailing stop 追蹤
+                            'initial_sl_price': sl_price,
+                            'highest_since_entry': actual_entry,
+                            'breakeven_activated': False,
                             'atr_at_entry': atr_val if (self.tp_sl_mode == 'atr'
                                                         and atr is not None
                                                         and not pd.isna(atr_val)) else 0,

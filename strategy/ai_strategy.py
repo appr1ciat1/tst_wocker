@@ -129,7 +129,9 @@ def build_liquid_universe(close_df, vol_df, top_n=50, lookback=20):
     return universe_mask
 
 
-def engineer_features(close_df, vol_df, universe_mask=None):
+def engineer_features(close_df, vol_df, universe_mask=None,
+                      ma_period=60, short_ma_period=20, multi_ma=False,
+                      ml_weights=False):
     """
     計算 AI 多維度特徵並做橫向百分位排名。
 
@@ -141,15 +143,25 @@ def engineer_features(close_df, vol_df, universe_mask=None):
         成交量矩陣 (日期 x 股票代號)
     universe_mask : pd.DataFrame (bool), optional
         動態 Universe 遮罩。若提供，只在當日 universe 中做排名。
+    ma_period : int
+        主趨勢均線天數（預設 60）
+    short_ma_period : int
+        短期均線天數（用於多均線確認，預設 20）
+    multi_ma : bool
+        啟用多均線確認（short_ma > long_ma 才允許進場）
+    ml_weights : bool
+        啟用 ML 因子加權（LightGBM 取代等權加總）
 
     Returns
     -------
     total_score : pd.DataFrame
-        各股票的 AI 綜合評分（0~4 之間），日期 x 股票
-    ma_60 : pd.DataFrame
-        60 日均線矩陣，用於進場信號過濾
+        各股票的 AI 綜合評分，日期 x 股票
+    ma_long : pd.DataFrame
+        主趨勢均線矩陣，用於進場信號過濾
     atr_df : pd.DataFrame
         20 日 ATR 矩陣，用於自適應 TP/SL 與 position sizing
+    short_ma : pd.DataFrame or None
+        短期均線矩陣（multi_ma=True 時有效）
     """
     print("🧠 正在計算多維度弱特徵與 Rank 排名...")
 
@@ -157,9 +169,9 @@ def engineer_features(close_df, vol_df, universe_mask=None):
     # 1. 20 日動能：今天收盤 / 20 天前收盤
     mom_20 = close_df / close_df.shift(20)
 
-    # 2. 60MA 乖離率：價格偏離 60 日均線的幅度
-    ma_60 = close_df.rolling(60).mean()
-    trend_bias = close_df / ma_60
+    # 2. MA 乖離率：價格偏離均線的幅度
+    ma_long = close_df.rolling(ma_period).mean()
+    trend_bias = close_df / ma_long
 
     # 3. 量能爆發比：5 日均量 / 20 日均量
     vol_surge = vol_df.rolling(5).mean() / (vol_df.rolling(20).mean() + 1e-8)
@@ -168,15 +180,14 @@ def engineer_features(close_df, vol_df, universe_mask=None):
     volatility = close_df.pct_change().rolling(20).std()
     stability = 1 / (volatility + 1e-8)
 
+    # 短期均線（多均線確認用）
+    short_ma = close_df.rolling(short_ma_period).mean() if multi_ma else None
+
     # === ATR 計算 (用於 TP/SL 與 sizing) ===
-    high_low = close_df.rolling(2).max() - close_df.rolling(2).min()
-    # 近似 ATR：使用收盤價的 rolling range（因為 engineer_features 不接收 high/low）
-    # 精確 ATR 將在 backtest 中使用 high_df/low_df 計算
     atr_df = close_df.pct_change().abs().rolling(20).mean() * close_df
 
     # === 橫向百分位排名 (Cross-Sectional Percentile Rank) ===
     if universe_mask is not None:
-        # 只在當日 universe 中做排名
         masked_mom = mom_20.where(universe_mask)
         masked_trend = trend_bias.where(universe_mask)
         masked_vol = vol_surge.where(universe_mask)
@@ -187,14 +198,108 @@ def engineer_features(close_df, vol_df, universe_mask=None):
         rank_vol = masked_vol.rank(axis=1, pct=True)
         rank_stab = masked_stab.rank(axis=1, pct=True)
     else:
-        # 全池排名（靜態池模式）
         rank_mom = mom_20.rank(axis=1, pct=True)
         rank_trend = trend_bias.rank(axis=1, pct=True)
         rank_vol = vol_surge.rank(axis=1, pct=True)
         rank_stab = stability.rank(axis=1, pct=True)
 
-    # === 等權加總（滿分 4.0）===
-    total_score = rank_mom + rank_trend + rank_vol + rank_stab
+    # === 因子加權 ===
+    if ml_weights:
+        total_score = _ml_factor_score(
+            close_df, rank_mom, rank_trend, rank_vol, rank_stab, universe_mask
+        )
+    else:
+        # 等權加總（滿分 4.0）
+        total_score = rank_mom + rank_trend + rank_vol + rank_stab
 
     print("   ✅ 特徵計算完成")
-    return total_score, ma_60, atr_df
+    return total_score, ma_long, atr_df, short_ma
+
+
+def _ml_factor_score(close_df, rank_mom, rank_trend, rank_vol, rank_stab,
+                     universe_mask=None, train_window=120, forward_days=10):
+    """
+    使用 LightGBM 進行因子加權。
+    滾動訓練：用過去 train_window 天的因子 → 未來 forward_days 天報酬的關係，
+    產出每日因子加權分數。
+
+    若 LightGBM 未安裝，自動 fallback 到等權加總。
+    """
+    try:
+        import lightgbm as lgb
+        print("   🤖 使用 LightGBM 因子加權模式...")
+    except ImportError:
+        print("   ⚠️ lightgbm 未安裝，fallback 到等權加總")
+        return rank_mom + rank_trend + rank_vol + rank_stab
+
+    # 未來 N 天報酬（作為 label）
+    fwd_ret = close_df.shift(-forward_days) / close_df - 1
+
+    total_score = pd.DataFrame(np.nan, index=close_df.index, columns=close_df.columns)
+    dates = close_df.index
+
+    # 每 20 天重新訓練一次模型（避免每天都訓練太慢）
+    retrain_interval = 20
+    model = None
+    last_train_idx = -retrain_interval
+
+    for i in range(train_window + forward_days, len(dates)):
+        # 訓練（每 retrain_interval 天更新）
+        if i - last_train_idx >= retrain_interval:
+            train_start = max(0, i - train_window - forward_days)
+            train_end = i - forward_days  # 確保 label 可用
+
+            # 收集訓練資料
+            X_list, y_list = [], []
+            for t in range(train_start, train_end):
+                for col in close_df.columns:
+                    if universe_mask is not None:
+                        if not universe_mask[col].iloc[t]:
+                            continue
+                    feats = [
+                        rank_mom[col].iloc[t],
+                        rank_trend[col].iloc[t],
+                        rank_vol[col].iloc[t],
+                        rank_stab[col].iloc[t],
+                    ]
+                    label = fwd_ret[col].iloc[t]
+                    if any(pd.isna(f) for f in feats) or pd.isna(label):
+                        continue
+                    X_list.append(feats)
+                    y_list.append(label)
+
+            if len(X_list) >= 50:
+                X_train = np.array(X_list)
+                y_train = np.array(y_list)
+                model = lgb.LGBMRegressor(
+                    n_estimators=50, max_depth=3, learning_rate=0.1,
+                    min_child_samples=10, subsample=0.8,
+                    verbosity=-1, n_jobs=-1
+                )
+                model.fit(X_train, y_train)
+                last_train_idx = i
+
+        # 預測
+        if model is not None:
+            for col in close_df.columns:
+                feats = [
+                    rank_mom[col].iloc[i],
+                    rank_trend[col].iloc[i],
+                    rank_vol[col].iloc[i],
+                    rank_stab[col].iloc[i],
+                ]
+                if any(pd.isna(f) for f in feats):
+                    continue
+                pred = model.predict([feats])[0]
+                total_score[col].iloc[i] = pred
+        else:
+            # 模型還沒訓練好，用等權 fallback
+            total_score.iloc[i] = (rank_mom.iloc[i] + rank_trend.iloc[i]
+                                   + rank_vol.iloc[i] + rank_stab.iloc[i])
+
+    # 轉為橫向排名（讓分數可比較）
+    total_score = total_score.rank(axis=1, pct=True) * 4
+
+    print(f"   ✅ ML 因子加權完成 (模型訓練 {(len(dates) - train_window) // retrain_interval} 次)")
+    return total_score
+
