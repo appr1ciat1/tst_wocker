@@ -768,12 +768,12 @@ def parse_args():
         help='固定模式停損百分比 (預設: 0.08 = -8%%)'
     )
     parser.add_argument(
-        '--tp-atr', type=float, default=3.0,
-        help='ATR 模式停利倍數 (預設: 3.0)'
+        '--tp-atr', type=float, default=4.0,
+        help='ATR 模式停利倍數 (預設: 4.0)'
     )
     parser.add_argument(
-        '--sl-atr', type=float, default=2.0,
-        help='ATR 模式停損倍數 (預設: 2.0)'
+        '--sl-atr', type=float, default=3.0,
+        help='ATR 模式停損倍數 (預設: 3.0)'
     )
 
     # Trailing Stop
@@ -788,8 +788,8 @@ def parse_args():
 
     # 選股
     parser.add_argument(
-        '--top-k', type=int, default=3,
-        help='每日最多進場股票數 (預設: 3)'
+        '--top-k', type=int, default=5,
+        help='每日最多進場股票數 (預設: 5)'
     )
     parser.add_argument(
         '--threshold', type=float, default=2.0,
@@ -804,12 +804,16 @@ def parse_args():
 
     # 進場過濾器
     parser.add_argument(
-        '--regime-filter', action='store_true',
-        help='啟用大盤過濾 (0050 > 60MA 才允許進場)'
+        '--regime-filter', action='store_true', default=True,
+        help='大盤過濾 (0050 > 60MA 才允許進場, 預設: ON)'
     )
     parser.add_argument(
-        '--gap-filter', type=float, default=0,
-        help='跳空過濾 ATR 倍數 (預設: 0=停用, 1.0=open 跳空超過 1 ATR 則跳過)'
+        '--no-regime-filter', action='store_false', dest='regime_filter',
+        help='停用大盤過濾'
+    )
+    parser.add_argument(
+        '--gap-filter', type=float, default=1.5,
+        help='跳空過濾 ATR 倍數 (預設: 1.5, 0=停用)'
     )
     parser.add_argument(
         '--volume-confirm', action='store_true',
@@ -866,8 +870,8 @@ def parse_args():
 
     # 回測
     parser.add_argument(
-        '--days', type=int, default=800,
-        help='歷史回測天數 (預設: 800)'
+        '--days', type=int, default=1200,
+        help='歷史回測天數 (預設: 1200)'
     )
 
     return parser.parse_args()
