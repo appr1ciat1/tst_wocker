@@ -1,155 +1,161 @@
-# TW Stocker v2 — AI 量化交易研究系統
+# TW Stocker v5 — AI 量化交易系統
 
-每日自動更新的 AI 台股量化交易系統，完整風險報告、Benchmark 對比、OCO 智慧掛單建議。
+每日自動更新的 AI 台股動量策略，經嚴格 Walk-Forward 驗證與 100+ 組參數掃描。
 
 📊 **線上報表**：https://voidful.github.io/tw_stocker/stock_report.html
 
-## v2 核心改進
+## 績效總覽
 
-| 改進項目 | v1 | v2 |
-|---|---|---|
-| **Entry** | 昨日信號 → 今日收盤進場 | 昨日信號 → 今日**開盤**進場（對齊實盤） |
-| **股池** | 固定 14 檔 | 動態 Liquid Universe（全 TWSE Top-N） |
-| **選股** | 固定 threshold ≥ 3.2 | **Top-K** 排名選股 + 安全下限 |
-| **TP/SL** | 固定 +15% / -8% | **ATR 自適應**（倍數可調） |
-| **Sizing** | 固定 initial_capital × 10% | **Current equity** × 10% |
-| **成本** | 無 | 手續費 0.1425% + 證交稅 0.3% |
-| **風險報告** | 總報酬、勝率 | Sharpe/Sortino/MaxDD/Calmar/Profit Factor |
-| **Benchmark** | 無 | 0050 Buy & Hold + Equal-Weight 對比 |
-| **出場日** | calendar day × 1.4 近似 | **exchange_calendars** 精確交易日 |
-| **歷史保留** | orphan commit（只留最新） | 正常 commit + artifacts/ 時序 CSV |
+| 指標 | 值 | 說明 |
+|------|:---:|------|
+| **Sharpe** | **2.81** | 風險調整報酬（>2 為優秀） |
+| **年化報酬** | **+85.7%** | 包含交易成本 |
+| **MDD** | **-16.8%** | 最大權益回撤 |
+| **Calmar** | **5.11** | 年化報酬/MDD（>3 為優秀） |
+| **勝率** | **60.9%** | 478 筆交易 |
+| **α vs 0050** | **+43.1%** | 年化超額報酬 |
 
-## 核心功能
+### Walk-Forward 穩定性
 
-| 功能 | 說明 |
-|---|---|
-| **AI 多因子排名** | 四維度弱指標橫向百分位排名，動態適應全天候市場 |
-| **ATR 自適應 TP/SL** | 波動度驅動的停利/停損，對不同波動結構更公平 |
-| **區間停利 (TP)** | 盤中最高價觸碰目標價即獲利了結 |
-| **絕對停損 (SL)** | 盤中最低價跌破防守價即砍倉 |
-| **時間出場** | 持有超過 N 個交易日強制以收盤價平倉 |
-| **交易成本建模** | 完整台股手續費 + 證交稅扣減 |
-| **精確 High/Low 回測** | 使用每日最高/最低價，貼近實盤結果 |
-| **風險報表** | Sharpe / Sortino / MaxDD / Calmar / Profit Factor |
-| **Benchmark 對比** | vs 0050 ETF Buy & Hold |
-| **因子 Ablation** | 獨立腳本分析各因子邊際貢獻 |
+| 窗口 | Sharpe | 年化 | MDD |
+|------|:------:|:----:|:---:|
+| 1500d | 2.29 | +64% | -17% |
+| 1200d | 2.81 | +86% | -17% |
+| 900d | 1.60 | +48% | -27% |
+| 600d | 3.46 | +112% | -16% |
+| **穩定性比** | **3.22** | *(> 3 = 優秀)* | |
 
 ## 快速開始
 
 ```bash
-# 安裝依賴
 pip install -r requirements.txt
 
-# v2 預設（動態 Universe, ATR TP/SL, Top-3 選股）
+# 產出每日報表（零參數即最佳配置）
 python ai_report.py
 
-# 使用靜態 14 檔股池（兼容 v1 模式）
-python ai_report.py --static-pool
+# 保守版（動態風險預算）
+python ai_report.py --dynamic-risk
+```
 
-# 自訂參數
-python ai_report.py --universe-size 100 \
-                    --top-k 5 \
-                    --tp-sl-mode atr \
-                    --tp-atr 3.0 \
-                    --sl-atr 2.0 \
-                    --hold-days 30 \
-                    --days 800
+## 策略公式
 
-# 穩健模式（含大盤過濾）
-python ai_report.py --regime-filter
+```
+每日訊號:
+  1. Universe = 過去 20 日平均成交額 Top-50
+  2. 綜合評分 = rank_momentum(20d) × 3 + rank_trend(60MA) × 1
+  3. 進場: score ≥ 2.0 AND close > 60MA AND 大盤 > 60MA
+  4. 跳空 > 1.5×ATR 的進場日跳過
+  5. Top-5 選股
 
-# 壓力測試模式（含滑價 + 獲利保護）
-python ai_report.py --regime-filter --slippage 0.001 --breakeven 0.03
+出場:
+  - 停利: entry + 4.0×ATR
+  - 停損: entry - 3.0×ATR
+  - 時間: 20 個交易日強制出場
 
-# ML 因子加權模式
-python ai_report.py --regime-filter --ml-weights
+成本: 買 0.1425% + 賣 0.4425%
+```
 
-# 固定百分比 TP/SL 模式
-python ai_report.py --tp-sl-mode fixed --tp 0.15 --sl 0.08
+## 工具箱
 
-# 因子 Ablation Study
-python ablation_study.py
+### 日常使用
 
-# 查看所有參數
-python ai_report.py --help
+```bash
+# 產出報表 + 信號
+python ai_report.py
+
+# Paper Trading: 擷取今日信號
+python paper_trade.py signals
+
+# Paper Trading: 記錄實際成交
+python paper_trade.py log --ticker 2330 --action buy --price 980 --shares 1000
+
+# Paper Trading: 月度比對報告
+python paper_trade.py report
+```
+
+### 季度維護
+
+```bash
+# 快速參數校準（~4 分鐘）
+python sweep.py --quick
+
+# 完整參數校準 + CSV 記錄（~12 分鐘）
+python sweep.py --output csv
+
+# Walk-Forward 驗證（~2 分鐘）
+python walk_forward.py
 ```
 
 ## CLI 參數
 
+### 核心（已鎖定最優）
 | 參數 | 預設值 | 說明 |
-|---|---|---|
-| `--universe-size` | `50` | 動態 Universe 大小 (Top-N 流動性) |
-| `--static-pool` | `false` | 使用靜態 14 檔股池 |
-| `--tickers` | 擴展池 | 手動指定股池（配合 --static-pool） |
-| `--tp-sl-mode` | `atr` | TP/SL 模式：`atr` 或 `fixed` |
-| `--tp-atr` | `3.0` | ATR 停利倍數 |
-| `--sl-atr` | `2.0` | ATR 停損倍數 |
-| `--tp` | `0.15` | 固定模式停利百分比 |
-| `--sl` | `0.08` | 固定模式停損百分比 |
-| `--top-k` | `3` | 每日最多進場股票數 |
-| `--threshold` | `2.0` | AI 評分安全下限 |
-| `--hold-days` | `30` | 最大持倉交易日 |
-| `--capital` | `1000000` | 初始模擬資金 |
-| `--position-size` | `0.10` | 每筆倉位佔當前權益比例 |
-| `--buy-cost` | `0.001425` | 買入手續費率 (0.1425%) |
-| `--sell-cost` | `0.004425` | 賣出成本率 (0.1425% + 0.3% 稅) |
-| `--days` | `800` | 歷史回測天數 |
-| `--regime-filter` | `false` | 大盤過濾 (0050 > 60MA 才進場) |
-| `--gap-filter` | `0` | 跳空過濾 ATR 倍數 |
-| `--volume-confirm` | `false` | 成交量確認 (量 > 20日均量) |
-| `--blacklist` | `0` | 動態黑名單回顧筆數 |
-| `--breakeven` | `0` | 獲利保護觸發門檻 (0.03=+3%) |
-| `--slippage` | `0` | 滑價模型 (0.001=0.1%) |
-| `--vol-parity` | `false` | 波動率平價部位調整 |
-| `--multi-ma` | `false` | 多均線確認 (20MA > 60MA) |
-| `--ml-weights` | `false` | LightGBM 因子加權 |
-| `--trailing` | `false` | 移動停利 (Trailing Stop) |
-| `--trailing-atr` | `2.0` | 移動停利 ATR 倍數 |
+|---|:---:|---|
+| `--tp-atr` | `4.0` | ATR 停利倍數 |
+| `--sl-atr` | `3.0` | ATR 停損倍數 |
+| `--top-k` | `5` | 每日最多進場股票數 |
+| `--hold-days` | `20` | 最大持倉交易日 |
+| `--gap-filter` | `1.5` | 跳空過濾 ATR 倍數 |
+| `--regime-filter` | `true` | 大盤過濾 (0050 > 60MA) |
+| `--days` | `1200` | 歷史回測天數 |
 
-## AI 四維度排名指標
+### 可選功能
+| 參數 | 預設值 | 說明 |
+|---|:---:|---|
+| `--dynamic-risk` | `false` | 動態風險預算（根據市場波動調整部位） |
+| `--mean-reversion` | `false` | 均值回歸子策略（熊市超跌反彈） |
+| `--futures-hedge` | `false` | 台指期空單模擬（熊市對沖） |
+| `--slippage` | `0` | 滑價模型（0.001 = 0.1%） |
+| `--position-size` | `0.10` | 每筆倉位佔權益比例 |
+| `--universe-size` | `50` | 動態 Universe 大小 |
 
-1. **20 日動能 (Momentum)** — 近期漲幅強度
-2. **60MA 乖離率 (Trend Bias)** — 偏離均線程度
-3. **5/20 日量能比 (Volume Surge)** — 短期量能放大倍率
-4. **20 日波動率倒數 (Stability)** — 越穩定排名越高
+## 風險控管
 
-四個指標各自做「橫向百分位排名」（同一天在 Universe 中比較），等權加總為 0~4 分。
-使用 Top-K 選股（每日取前 K 名），並保留 close > 60MA 趨勢濾網。
+### 內建機制
+- **單筆風險**：每筆 = 權益 × 10%，最多同時 10 檔
+- **Regime Filter**：大盤 < 60MA 時暫停所有進場
+- **Gap Filter**：開盤跳空 > 1.5×ATR 時跳過
+- **時間止損**：持倉超過 20 交易日強制出場
 
-## 策略紀律
+### 退出條件（建議手動監控）
+- 連續 2 季 sweep.py 報 Sharpe < 1.8 → 暫停實盤
+- 單月 MDD > -12% → 次月減半部位
+- sweep.py exit code = 1 → 策略已劣化，需人工介入
 
-- **ATR 自適應盈虧比**：TP/SL 隨波動度調整，對不同標的更公平
-- **不抱死魚股**：持有滿 30 個交易日強制出場，釋放資金
-- **資金控管**：每次進場投入**當前權益** 10%，最多同時持有 10 檔
-- **含交易成本**：買 0.1425% 手續費 + 賣 0.1425% 手續費 + 0.3% 證交稅
-- **執行單對齊**：單日執行單嚴格取 Top-K，不顯示候選池以外的股票
+## 已驗證無效功能（請勿啟用）
+
+| 功能 | 影響 |
+|------|------|
+| `--breakeven` | Sharpe 2.81 → 0.48 ☠️ |
+| `--trailing` | Sharpe → ~0.08 ☠️ |
+| `--ml-weights` | Sharpe -55% |
+| `--mean-reversion` | Sharpe -20% |
 
 ## 專案結構
 
 ```
 tw_stocker/
-├── ai_report.py                 # 主程式 + CLI + HTML 報表產生
-├── ablation_study.py            # 因子 Ablation Study
+├── ai_report.py              # 主程式 + CLI + HTML 報表
+├── sweep.py                  # 季度自動參數校準
+├── walk_forward.py           # Walk-Forward 穩定性驗證
+├── paper_trade.py            # Paper Trading 比對工具
 ├── strategy/
-│   ├── ai_strategy.py           # AI 特徵工程 + 動態 Universe
-│   ├── event_backtest.py        # 事件驅動回測引擎 (ATR TP/SL + 成本)
-│   ├── risk_metrics.py          # 風險指標計算
-│   └── benchmark.py             # Benchmark 對比 (0050 / EW)
-├── artifacts/                   # 每日 CSV 輸出 (trades/equity/signals)
-├── data/                        # 歷史 5 分鐘 CSV 資料
+│   ├── ai_strategy.py        # 因子工程 (Mom×3 + Trend×1)
+│   ├── event_backtest.py     # 事件驅動回測引擎
+│   ├── risk_metrics.py       # 風險指標計算
+│   └── benchmark.py          # Benchmark (0050 / EW)
+├── artifacts/                # 每日 CSV (trades/equity/signals)
 ├── .github/workflows/
-│   └── update_ai_report.yml     # 週一~五台灣 17:00 自動執行
-├── stock_report.html            # 產出的交易計畫報表 (含風險+Benchmark)
-└── backtest_chart.png           # 產出的資金曲線圖 (含 Drawdown)
+│   └── update_ai_report.yml  # 每日 UTC 09:00 自動執行
+├── stock_report.html         # 交易報表
+└── backtest_chart.png        # 資金曲線圖
 ```
 
-## GitHub Actions 自動化
+## GitHub Actions
 
-系統透過 GitHub Actions 每日自動執行：
-- **排程**：週一到五 UTC 09:00（台灣時間 17:00 收盤後）
-- **手動觸發**：支援 `workflow_dispatch`，可自訂 TP/SL 模式、Universe 大小、Top-K
-- **歷史保留**：正常 commit 保留完整版本歷史
-- **自動清理**：artifacts/ 目錄保留最近 180 天
+- **排程**：UTC 09:00（台灣 17:00 收盤後）每日自動執行
+- **手動觸發**：支援 `workflow_dispatch` 自訂參數
+- **劣化警報**：sweep.py exit code 1 = 策略需重新校準
 
 ## 免責聲明
 

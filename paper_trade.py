@@ -8,11 +8,21 @@ Paper Trading 比對工具
   # 1. 產出今日信號
   python paper_trade.py signals
 
-  # 2. 記錄實際成交（手動輸入）
+  # 2. 產出信號 + LINE 通知
+  python paper_trade.py signals --notify
+
+  # 3. 記錄實際成交（手動輸入）
   python paper_trade.py log --ticker 2330 --action buy --price 980 --shares 1000
 
-  # 3. 比對報告
+  # 4. 比對報告
   python paper_trade.py report
+
+  # 5. 風險警報（檢查回撤）
+  python paper_trade.py alert --max-dd 12
+
+LINE Notify 設定:
+  export LINE_NOTIFY_TOKEN='your_token_here'
+  # 申請地址: https://notify-bot.line.me/my/
 """
 
 import json
@@ -24,6 +34,27 @@ import argparse
 
 TRADE_LOG = 'paper_trades.json'
 SIGNAL_LOG = 'paper_signals.json'
+
+
+def send_line_notify(message):
+    """透過 LINE Notify 傳送通知。需設定環境變數 LINE_NOTIFY_TOKEN。"""
+    token = os.environ.get('LINE_NOTIFY_TOKEN')
+    if not token:
+        return False
+    try:
+        import urllib.request
+        import urllib.parse
+        data = urllib.parse.urlencode({'message': message}).encode()
+        req = urllib.request.Request(
+            'https://notify-api.line.me/api/notify',
+            data=data,
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except Exception as e:
+        print(f'   ⚠️ LINE 通知失敗: {e}')
+        return False
 
 
 def load_json(path):
@@ -88,6 +119,16 @@ def generate_signals(args):
         signals.extend(new_signals)
         save_json(SIGNAL_LOG, signals)
         print(f"\n✅ {len(new_signals)} 筆信號已記錄到 {SIGNAL_LOG}")
+
+        # LINE 通知
+        if hasattr(args, 'notify') and args.notify:
+            msg = f"\n📊 今日執行信號 ({today})\n"
+            for s in new_signals:
+                msg += f"{s['ticker']} 進場{s['entry_price']:.1f} TP{s['tp_price']:.1f} SL{s['sl_price']:.1f}\n"
+            if send_line_notify(msg):
+                print("📤 已傳送 LINE 通知")
+            else:
+                print("⚠️ LINE 通知未設定（設定 LINE_NOTIFY_TOKEN 環境變數）")
 
 
 def log_trade(args):
@@ -172,12 +213,48 @@ def generate_report(args):
             print("   🚨 滑價過大，需檢查執行流程")
 
 
+def check_alert(args):
+    """風險警報：檢查當前回撤是否超過門檻。"""
+    import re
+
+    report_path = 'stock_report.html'
+    if not os.path.exists(report_path):
+        print("⚠️ stock_report.html 不存在")
+        return
+
+    with open(report_path) as f:
+        html = f.read()
+
+    # 擷取 MDD（格式：<div class="label">最大回撤</div>\n<div class="value"...>-17.5%</div>）
+    mdd_match = re.search(r'最大回撤.*?([\-\d\.]+)%', html, re.DOTALL)
+    if not mdd_match:
+        print("⚠️ 無法擷取回撤數據")
+        return
+
+    mdd = abs(float(mdd_match.group(1)))
+    max_dd = args.max_dd
+
+    print(f"🚨 風險檢查")
+    print(f"   當前 MDD:  -{mdd:.1f}%")
+    print(f"   警報門檻: -{max_dd:.1f}%")
+
+    if mdd > max_dd:
+        msg = f"\n🚨 風險警報！MDD -{mdd:.1f}% 已超過門檻 -{max_dd:.1f}%\n建議次月減半部位或暫停新倉"
+        print(msg)
+        if send_line_notify(msg):
+            print("📤 已傳送 LINE 警報")
+        sys.exit(1)
+    else:
+        print(f"   ✅ MDD 在安全範圍內")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Paper Trading 比對工具')
     subparsers = parser.add_subparsers(dest='command', help='commands')
 
     # signals
-    subparsers.add_parser('signals', help='擷取今日信號')
+    sig_parser = subparsers.add_parser('signals', help='擷取今日信號')
+    sig_parser.add_argument('--notify', action='store_true', help='傳送 LINE 通知')
 
     # log
     log_parser = subparsers.add_parser('log', help='記錄實際成交')
@@ -189,6 +266,11 @@ def main():
     # report
     subparsers.add_parser('report', help='比對報告')
 
+    # alert
+    alert_parser = subparsers.add_parser('alert', help='風險警報')
+    alert_parser.add_argument('--max-dd', type=float, default=12.0,
+                              help='回撤警報門檻 (預設 12%%)')
+
     args = parser.parse_args()
 
     if args.command == 'signals':
@@ -197,6 +279,8 @@ def main():
         log_trade(args)
     elif args.command == 'report':
         generate_report(args)
+    elif args.command == 'alert':
+        check_alert(args)
     else:
         parser.print_help()
 
