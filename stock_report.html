@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 台股量化交易 v2 — 2026-04-02</title>
+    <title>AI 台股量化交易 v5 — 2026-04-02</title>
     <meta name="description" content="AI 驅動的台股量化交易系統 v2，完整風險報告、Benchmark 對比、OCO 智慧掛單建議">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
@@ -120,7 +120,7 @@
 <body>
 <div class="container">
 
-    <h1>🎯 AI 台股量化交易 v2</h1>
+    <h1>🎯 AI 台股量化交易 v5</h1>
     <p class="subtitle">
         Event-Driven System &nbsp;|&nbsp; 報表日期: 2026-04-02 &nbsp;|&nbsp;
         <span class="config-badge">🛡️ ATR×4.0/3.0</span>
@@ -239,6 +239,101 @@
     </div>
     <img src="backtest_chart.png" alt="AI Quantitative Backtest Equity Curve with Benchmark">
 
+    <h2>🌐 大盤環境診斷</h2>
+    <p class="section-note">判斷目前市場 regime 與近期趨勢，幫助你決定是否積極或保守操作。</p>
+
+    <div class="stats">
+        <div class="stat-card" style="border-left-color:#00ff00">
+            <div class="label">大盤 Regime</div>
+            <div class="value" style="color:#00ff00">🟢 多頭</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 近 5 日</div>
+            <div class="value" style="color:#ff4444">-1.4%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 近 20 日</div>
+            <div class="value" style="color:#ff4444">-3.8%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 近 60 日</div>
+            <div class="value" style="color:#00ff00">+14.9%</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">市場波動率 (20D)</div>
+            <div class="value">35.3%</div>
+        </div>
+    </div>
+
+    <h2>📉 回撤深度分析</h2>
+    <p class="section-note">歷史回撤事件的深度與持續時間，識別策略最脆弱的時期。</p>
+
+    <div class="stats">
+        <div class="stat-card risk">
+            <div class="label">目前回撤</div>
+            <div class="value" style="color:#ffab00">-7.5%</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">權益最高點</div>
+            <div class="value">6,583,990</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">歷史回撤次數</div>
+            <div class="value">35</div>
+        </div>
+    </div>
+    <table>
+        <thead><tr><th>#</th><th>開始日</th><th>恢復日</th><th>最大深度</th><th>持續天數</th></tr></thead>
+        <tbody>
+<tr><td>#1</td><td>2024-07-12</td><td>2025-06-12</td><td style="color:#ff4444; font-weight:bold">-16.8%</td><td>335 天</td></tr>
+<tr><td>#2</td><td>2026-03-02</td><td>2026-03-19</td><td style="color:#ff4444; font-weight:bold">-16.4%</td><td>17 天</td></tr>
+<tr><td>#3</td><td>2023-07-31</td><td>2024-02-05</td><td style="color:#ff4444; font-weight:bold">-14.0%</td><td>189 天</td></tr>
+<tr><td>#4</td><td>2024-04-10</td><td>2024-05-16</td><td style="color:#ff4444; font-weight:bold">-10.5%</td><td>36 天</td></tr>
+<tr><td>#5</td><td>2025-08-19</td><td>2025-09-10</td><td style="color:#ff4444; font-weight:bold">-10.4%</td><td>22 天</td></tr>
+
+        </tbody>
+    </table>
+
+    <h2>📊 滾動績效指標 (60 日)</h2>
+    <p class="section-note">近期表現是否仍在健康範圍內，偏離均值時需警惕。</p>
+
+    <div class="stats">
+        <div class="stat-card" style="border-left-color:#00ff00">
+            <div class="label">近 60 日 Sharpe</div>
+            <div class="value" style="color:#00ff00">2.59</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">歷史平均 Sharpe</div>
+            <div class="value">2.03</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">歷史最低 Sharpe</div>
+            <div class="value">-2.48</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">歷史最高 Sharpe</div>
+            <div class="value">9.08</div>
+        </div>
+    </div>
+
+    <h2>🔥 連續盈虧分析</h2>
+    <p class="section-note">連勝/連敗紀錄與近期走勢，評估策略是否處於熱手或冷卻期。</p>
+
+    <div class="stats">
+        <div class="stat-card">
+            <div class="label">最長連勝</div>
+            <div class="value" style="color:#00ff00">27 筆</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">最長連敗</div>
+            <div class="value" style="color:#ff4444">12 筆</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">近 5 筆走勢</div>
+            <div class="value" style="font-size:1.2rem">🟢 🔴 🟢 🔴 🟢 </div>
+        </div>
+    </div>
+
     <h2>📋 出場原因分布統計</h2>
     <table>
         <thead><tr><th>出場原因</th><th>次數</th><th>平均報酬</th></tr></thead>
@@ -248,6 +343,51 @@
 <tr><td>🔴 停損</td><td>105 筆</td><td style="color:#ff4444">-11.97%</td></tr>
 
         </tbody>
+    </table>
+
+    <h2>📊 報酬分布直方圖</h2>
+    <p class="section-note">每筆交易報酬的分布形狀，正偏態代表策略有良好的尾部收益。</p>
+
+    <table>
+        <thead><tr><th>報酬區間</th><th>筆數</th><th>佔比</th><th>分布</th></tr></thead>
+        <tbody><tr><td>< -15%</td><td>20</td><td>4.2%</td><td><div style="background:#ff4444; width:12.474012474012476%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>-15~-10%</td><td>60</td><td>12.5%</td><td><div style="background:#ff4444; width:37.42203742203743%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>-10~-5%</td><td>62</td><td>12.9%</td><td><div style="background:#ff4444; width:38.66943866943868%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>-5~0%</td><td>48</td><td>10.0%</td><td><div style="background:#ff4444; width:29.93762993762994%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>0~5%</td><td>45</td><td>9.4%</td><td><div style="background:#00ff00; width:28.066528066528072%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>5~10%</td><td>38</td><td>7.9%</td><td><div style="background:#00ff00; width:23.7006237006237%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>10~20%</td><td>192</td><td>39.9%</td><td><div style="background:#00ff00; width:100%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>> 20%</td><td>16</td><td>3.3%</td><td><div style="background:#00ff00; width:9.97920997920998%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+</tbody>
+    </table>
+
+    <h2>🏅 個股績效排行榜</h2>
+    <p class="section-note">哪些股票貢獻最多利潤、哪些持續虧損，幫助判讀信號品質。</p>
+
+    <h3 style="color:#00e5ff; margin-top:16px">🏆 Top 10 貢獻股</h3>
+    <table>
+        <thead><tr><th>股票</th><th>交易數</th><th>勝率</th><th>平均報酬</th><th>總貢獻</th></tr></thead>
+        <tbody><tr><td><b>1519</b></td><td>27</td><td style="color:#00ff00">67%</td><td style="color:#00ff00">+7.7%</td><td style="color:#00ff00; font-weight:bold">+208.8%</td></tr>
+<tr><td><b>3017</b></td><td>20</td><td style="color:#00ff00">85%</td><td style="color:#00ff00">+10.4%</td><td style="color:#00ff00; font-weight:bold">+207.5%</td></tr>
+<tr><td><b>2408</b></td><td>16</td><td style="color:#00ff00">81%</td><td style="color:#00ff00">+10.9%</td><td style="color:#00ff00; font-weight:bold">+173.9%</td></tr>
+<tr><td><b>2344</b></td><td>12</td><td style="color:#00ff00">83%</td><td style="color:#00ff00">+12.7%</td><td style="color:#00ff00; font-weight:bold">+151.8%</td></tr>
+<tr><td><b>2383</b></td><td>18</td><td style="color:#00ff00">78%</td><td style="color:#00ff00">+8.1%</td><td style="color:#00ff00; font-weight:bold">+146.3%</td></tr>
+<tr><td><b>3231</b></td><td>14</td><td style="color:#00ff00">71%</td><td style="color:#00ff00">+9.5%</td><td style="color:#00ff00; font-weight:bold">+132.8%</td></tr>
+<tr><td><b>2404</b></td><td>17</td><td style="color:#00ff00">76%</td><td style="color:#00ff00">+5.6%</td><td style="color:#00ff00; font-weight:bold">+94.5%</td></tr>
+<tr><td><b>6770</b></td><td>8</td><td style="color:#00ff00">100%</td><td style="color:#00ff00">+10.9%</td><td style="color:#00ff00; font-weight:bold">+87.0%</td></tr>
+<tr><td><b>2382</b></td><td>12</td><td style="color:#00ff00">67%</td><td style="color:#00ff00">+7.0%</td><td style="color:#00ff00; font-weight:bold">+84.4%</td></tr>
+<tr><td><b>3037</b></td><td>11</td><td style="color:#00ff00">73%</td><td style="color:#00ff00">+6.9%</td><td style="color:#00ff00; font-weight:bold">+76.4%</td></tr>
+</tbody>
+    </table>
+    <h3 style="color:#ff4444; margin-top:16px">📉 Bottom 5 虧損股</h3>
+    <table>
+        <thead><tr><th>股票</th><th>交易數</th><th>勝率</th><th>平均報酬</th><th>總貢獻</th></tr></thead>
+        <tbody><tr style="opacity:0.7"><td><b>3706</b></td><td>8</td><td style="color:#ff4444">38%</td><td style="color:#ff4444">-1.8%</td><td style="color:#ff4444; font-weight:bold">-14.2%</td></tr>
+<tr style="opacity:0.7"><td><b>2634</b></td><td>2</td><td style="color:#ff4444">0%</td><td style="color:#ff4444">-8.2%</td><td style="color:#ff4444; font-weight:bold">-16.3%</td></tr>
+<tr style="opacity:0.7"><td><b>6285</b></td><td>9</td><td style="color:#ff4444">33%</td><td style="color:#ff4444">-1.9%</td><td style="color:#ff4444; font-weight:bold">-16.8%</td></tr>
+<tr style="opacity:0.7"><td><b>2353</b></td><td>2</td><td style="color:#ff4444">0%</td><td style="color:#ff4444">-9.0%</td><td style="color:#ff4444; font-weight:bold">-17.9%</td></tr>
+<tr style="opacity:0.7"><td><b>2303</b></td><td>3</td><td style="color:#ff4444">33%</td><td style="color:#ff4444">-6.3%</td><td style="color:#ff4444; font-weight:bold">-18.8%</td></tr>
+</tbody>
     </table>
 
     <h2>📜 最近交易紀錄 (最新 20 筆)</h2>
@@ -333,8 +473,8 @@
         ⚠️ <b>免責聲明：</b>本報表由 AI 量化模型自動產出，僅供學術研究與技術交流之用，
         不構成任何投資建議。歷史回測績效不代表未來實際報酬，投資有風險，決策請自行負責。
         <br><br>
-        <b>v2 方法論：</b>Entry = t+1 open | TP/SL = ATR×4.0/3.0 | 選股 = Top-5 cross-sectional rank |
-        成本 = 買 0.143% + 賣 0.443% | 回撤期 = 2.9 年
+        <b>v5 方法論：</b>Entry = t+1 open | TP/SL = ATR×4.0/3.0 | 選股 = Top-5 cross-sectional rank |
+        成本 = 買 0.143% + 賣 0.443% | 回測期 = 2.9 年 | 因子 = Mom(20d)×3 + Trend(60MA)×1
     </div>
 
 </div>

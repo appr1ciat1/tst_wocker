@@ -460,6 +460,276 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         except Exception:
             pass
 
+    # === 大盤環境診斷 ===
+    market_context_html = ""
+    try:
+        if benchmark_equity is not None and len(benchmark_equity) > 20:
+            mkt_latest = benchmark_equity.iloc[-1]
+            mkt_5d = benchmark_equity.iloc[-5] if len(benchmark_equity) >= 5 else mkt_latest
+            mkt_20d = benchmark_equity.iloc[-20] if len(benchmark_equity) >= 20 else mkt_latest
+            mkt_60d = benchmark_equity.iloc[-60] if len(benchmark_equity) >= 60 else mkt_latest
+            ret_5d = (mkt_latest / mkt_5d - 1) * 100
+            ret_20d = (mkt_latest / mkt_20d - 1) * 100
+            ret_60d = (mkt_latest / mkt_60d - 1) * 100
+
+            # 判斷 regime
+            mkt_ma60 = benchmark_equity.rolling(60).mean().iloc[-1] if len(benchmark_equity) >= 60 else None
+            if mkt_ma60 is not None:
+                regime = "🟢 多頭" if mkt_latest > mkt_ma60 else "🔴 空頭"
+                regime_color = "#00ff00" if mkt_latest > mkt_ma60 else "#ff4444"
+            else:
+                regime = "⚪ 未知"
+                regime_color = "#888"
+
+            # 波動率
+            mkt_vol = benchmark_equity.pct_change().tail(20).std() * (252**0.5) * 100
+
+            market_context_html = f"""
+    <div class="stats">
+        <div class="stat-card" style="border-left-color:{regime_color}">
+            <div class="label">大盤 Regime</div>
+            <div class="value" style="color:{regime_color}">{regime}</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 近 5 日</div>
+            <div class="value" style="color:{'#00ff00' if ret_5d > 0 else '#ff4444'}">{ret_5d:+.1f}%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 近 20 日</div>
+            <div class="value" style="color:{'#00ff00' if ret_20d > 0 else '#ff4444'}">{ret_20d:+.1f}%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 近 60 日</div>
+            <div class="value" style="color:{'#00ff00' if ret_60d > 0 else '#ff4444'}">{ret_60d:+.1f}%</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">市場波動率 (20D)</div>
+            <div class="value">{mkt_vol:.1f}%</div>
+        </div>
+    </div>"""
+    except Exception:
+        pass
+
+    # === 回撤分析 ===
+    drawdown_analysis_html = ""
+    try:
+        eq = equity_df['Equity']
+        cummax_eq = eq.cummax()
+        dd_series = (eq / cummax_eq - 1) * 100
+        current_dd = dd_series.iloc[-1]
+        peak_date = cummax_eq.idxmax() if hasattr(cummax_eq, 'idxmax') else None
+        peak_val = cummax_eq.max()
+
+        # 回撤時間
+        in_dd = dd_series < -1  # 超過 1% 才算回撤
+        dd_periods = []
+        start = None
+        for dt, val in dd_series.items():
+            if val < -1 and start is None:
+                start = dt
+            elif val >= -0.5 and start is not None:
+                dd_periods.append((start, dt, dd_series.loc[start:dt].min()))
+                start = None
+        if start is not None:
+            dd_periods.append((start, dd_series.index[-1], dd_series.loc[start:].min()))
+
+        # Top 5 回撤
+        dd_periods.sort(key=lambda x: x[2])
+        top_dd_rows = ""
+        for i, (s, e, depth) in enumerate(dd_periods[:5]):
+            duration = (e - s).days
+            top_dd_rows += (
+                f'<tr><td>#{i+1}</td>'
+                f'<td>{s.strftime("%Y-%m-%d")}</td>'
+                f'<td>{e.strftime("%Y-%m-%d")}</td>'
+                f'<td style="color:#ff4444; font-weight:bold">{depth:.1f}%</td>'
+                f'<td>{duration} 天</td></tr>\n'
+            )
+
+        dd_color2 = "#00ff00" if current_dd > -5 else ("#ffab00" if current_dd > -10 else "#ff4444")
+        drawdown_analysis_html = f"""
+    <div class="stats">
+        <div class="stat-card risk">
+            <div class="label">目前回撤</div>
+            <div class="value" style="color:{dd_color2}">{current_dd:.1f}%</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">權益最高點</div>
+            <div class="value">{peak_val:,.0f}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">歷史回撤次數</div>
+            <div class="value">{len(dd_periods)}</div>
+        </div>
+    </div>
+    <table>
+        <thead><tr><th>#</th><th>開始日</th><th>恢復日</th><th>最大深度</th><th>持續天數</th></tr></thead>
+        <tbody>
+{top_dd_rows}
+        </tbody>
+    </table>"""
+    except Exception:
+        pass
+
+    # === 滾動 Sharpe (60 日) ===
+    rolling_perf_html = ""
+    try:
+        eq = equity_df['Equity']
+        daily_ret = eq.pct_change().dropna()
+        if len(daily_ret) > 60:
+            roll_sharpe = daily_ret.rolling(60).mean() / daily_ret.rolling(60).std() * (252**0.5)
+            roll_sharpe = roll_sharpe.dropna()
+            recent_sharpe = roll_sharpe.iloc[-1]
+            avg_sharpe = roll_sharpe.mean()
+            min_sharpe = roll_sharpe.min()
+            max_sharpe = roll_sharpe.max()
+
+            rs_color = "#00ff00" if recent_sharpe > 2 else ("#ffab00" if recent_sharpe > 1 else "#ff4444")
+            rolling_perf_html = f"""
+    <div class="stats">
+        <div class="stat-card" style="border-left-color:{rs_color}">
+            <div class="label">近 60 日 Sharpe</div>
+            <div class="value" style="color:{rs_color}">{recent_sharpe:.2f}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">歷史平均 Sharpe</div>
+            <div class="value">{avg_sharpe:.2f}</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">歷史最低 Sharpe</div>
+            <div class="value">{min_sharpe:.2f}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">歷史最高 Sharpe</div>
+            <div class="value">{max_sharpe:.2f}</div>
+        </div>
+    </div>"""
+    except Exception:
+        pass
+
+    # === 連續盈虧分析 ===
+    streak_html = ""
+    try:
+        if not trades_df.empty:
+            returns = trades_df['Return_Pct'].values
+            max_win_streak = max_loss_streak = 0
+            cur_win = cur_loss = 0
+            for r in returns:
+                if r > 0:
+                    cur_win += 1
+                    cur_loss = 0
+                    max_win_streak = max(max_win_streak, cur_win)
+                else:
+                    cur_loss += 1
+                    cur_win = 0
+                    max_loss_streak = max(max_loss_streak, cur_loss)
+
+            # 最近 5 筆
+            last5 = trades_df.tail(5)
+            recent_streak = ""
+            for _, r in last5.iterrows():
+                c = "🟢" if r['Return_Pct'] > 0 else "🔴"
+                recent_streak += f"{c} "
+
+            streak_html = f"""
+    <div class="stats">
+        <div class="stat-card">
+            <div class="label">最長連勝</div>
+            <div class="value" style="color:#00ff00">{max_win_streak} 筆</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">最長連敗</div>
+            <div class="value" style="color:#ff4444">{max_loss_streak} 筆</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">近 5 筆走勢</div>
+            <div class="value" style="font-size:1.2rem">{recent_streak}</div>
+        </div>
+    </div>"""
+    except Exception:
+        pass
+
+    # === Per-stock 排行榜 ===
+    stock_leaderboard_html = ""
+    try:
+        if stock_stats:
+            sorted_stocks = sorted(stock_stats.items(), key=lambda x: x[1]['total_return'], reverse=True)
+            # Top 10 + Bottom 5
+            top_rows = ""
+            for ticker, ss in sorted_stocks[:10]:
+                ret_color = "#00ff00" if ss['total_return'] > 0 else "#ff4444"
+                wr_color = "#00ff00" if ss['win_rate'] >= 50 else "#ff4444"
+                top_rows += (
+                    f'<tr>'
+                    f'<td><b>{ticker}</b></td>'
+                    f'<td>{ss["trades"]}</td>'
+                    f'<td style="color:{wr_color}">{ss["win_rate"]:.0f}%</td>'
+                    f'<td style="color:{ret_color}">{ss["avg_return"]:+.1f}%</td>'
+                    f'<td style="color:{ret_color}; font-weight:bold">{ss["total_return"]:+.1f}%</td>'
+                    f'</tr>\n'
+                )
+            bottom_rows = ""
+            for ticker, ss in sorted_stocks[-5:]:
+                ret_color = "#00ff00" if ss['total_return'] > 0 else "#ff4444"
+                wr_color = "#00ff00" if ss['win_rate'] >= 50 else "#ff4444"
+                bottom_rows += (
+                    f'<tr style="opacity:0.7">'
+                    f'<td><b>{ticker}</b></td>'
+                    f'<td>{ss["trades"]}</td>'
+                    f'<td style="color:{wr_color}">{ss["win_rate"]:.0f}%</td>'
+                    f'<td style="color:{ret_color}">{ss["avg_return"]:+.1f}%</td>'
+                    f'<td style="color:{ret_color}; font-weight:bold">{ss["total_return"]:+.1f}%</td>'
+                    f'</tr>\n'
+                )
+
+            stock_leaderboard_html = f"""
+    <h3 style="color:#00e5ff; margin-top:16px">🏆 Top 10 貢獻股</h3>
+    <table>
+        <thead><tr><th>股票</th><th>交易數</th><th>勝率</th><th>平均報酬</th><th>總貢獻</th></tr></thead>
+        <tbody>{top_rows}</tbody>
+    </table>
+    <h3 style="color:#ff4444; margin-top:16px">📉 Bottom 5 虧損股</h3>
+    <table>
+        <thead><tr><th>股票</th><th>交易數</th><th>勝率</th><th>平均報酬</th><th>總貢獻</th></tr></thead>
+        <tbody>{bottom_rows}</tbody>
+    </table>"""
+    except Exception:
+        pass
+
+    # === 報酬分布 ===
+    distribution_html = ""
+    try:
+        if not trades_df.empty:
+            rets = trades_df['Return_Pct'] * 100
+            buckets = [
+                ('< -15%', -999, -15), ('-15~-10%', -15, -10), ('-10~-5%', -10, -5),
+                ('-5~0%', -5, 0), ('0~5%', 0, 5), ('5~10%', 5, 10),
+                ('10~20%', 10, 20), ('> 20%', 20, 999),
+            ]
+            dist_rows = ""
+            for label, lo, hi in buckets:
+                cnt = len(rets[(rets >= lo) & (rets < hi)])
+                pct = cnt / len(rets) * 100
+                bar_width = min(pct * 3, 100)
+                color = "#ff4444" if lo < 0 else "#00ff00"
+                dist_rows += (
+                    f'<tr>'
+                    f'<td>{label}</td>'
+                    f'<td>{cnt}</td>'
+                    f'<td>{pct:.1f}%</td>'
+                    f'<td><div style="background:{color}; width:{bar_width}%; height:14px; '
+                    f'border-radius:3px; opacity:0.6"></div></td>'
+                    f'</tr>\n'
+                )
+
+            distribution_html = f"""
+    <table>
+        <thead><tr><th>報酬區間</th><th>筆數</th><th>佔比</th><th>分布</th></tr></thead>
+        <tbody>{dist_rows}</tbody>
+    </table>"""
+    except Exception:
+        pass
+
     # === 產出 HTML ===
     report_date = latest_date.strftime('%Y-%m-%d')
     cost_desc = f"買 {config.get('buy_cost', 0.001425)*100:.3f}% + 賣 {config.get('sell_cost', 0.004425)*100:.3f}%"
@@ -473,7 +743,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 台股量化交易 v2 — {report_date}</title>
+    <title>AI 台股量化交易 v5 — {report_date}</title>
     <meta name="description" content="AI 驅動的台股量化交易系統 v2，完整風險報告、Benchmark 對比、OCO 智慧掛單建議">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
@@ -590,7 +860,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 <body>
 <div class="container">
 
-    <h1>🎯 AI 台股量化交易 v2</h1>
+    <h1>🎯 AI 台股量化交易 v5</h1>
     <p class="subtitle">
         Event-Driven System &nbsp;|&nbsp; 報表日期: {report_date} &nbsp;|&nbsp;
         <span class="config-badge">🛡️ {mode_html}</span>
@@ -676,6 +946,22 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 {benchmark_stats_html}
     <img src="backtest_chart.png" alt="AI Quantitative Backtest Equity Curve with Benchmark">
 
+    <h2>🌐 大盤環境診斷</h2>
+    <p class="section-note">判斷目前市場 regime 與近期趨勢，幫助你決定是否積極或保守操作。</p>
+{market_context_html}
+
+    <h2>📉 回撤深度分析</h2>
+    <p class="section-note">歷史回撤事件的深度與持續時間，識別策略最脆弱的時期。</p>
+{drawdown_analysis_html}
+
+    <h2>📊 滾動績效指標 (60 日)</h2>
+    <p class="section-note">近期表現是否仍在健康範圍內，偏離均值時需警惕。</p>
+{rolling_perf_html}
+
+    <h2>🔥 連續盈虧分析</h2>
+    <p class="section-note">連勝/連敗紀錄與近期走勢，評估策略是否處於熱手或冷卻期。</p>
+{streak_html}
+
     <h2>📋 出場原因分布統計</h2>
     <table>
         <thead><tr><th>出場原因</th><th>次數</th><th>平均報酬</th></tr></thead>
@@ -683,6 +969,14 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 {reason_stats_rows}
         </tbody>
     </table>
+
+    <h2>📊 報酬分布直方圖</h2>
+    <p class="section-note">每筆交易報酬的分布形狀，正偏態代表策略有良好的尾部收益。</p>
+{distribution_html}
+
+    <h2>🏅 個股績效排行榜</h2>
+    <p class="section-note">哪些股票貢獻最多利潤、哪些持續虧損，幫助判讀信號品質。</p>
+{stock_leaderboard_html}
 
     <h2>📜 最近交易紀錄 (最新 20 筆)</h2>
     <table>
@@ -705,8 +999,8 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         ⚠️ <b>免責聲明：</b>本報表由 AI 量化模型自動產出，僅供學術研究與技術交流之用，
         不構成任何投資建議。歷史回測績效不代表未來實際報酬，投資有風險，決策請自行負責。
         <br><br>
-        <b>v2 方法論：</b>Entry = t+1 open | TP/SL = {mode_html} | 選股 = Top-{top_k} cross-sectional rank |
-        成本 = {cost_desc} | 回撤期 = {m['years']:.1f} 年
+        <b>v5 方法論：</b>Entry = t+1 open | TP/SL = {mode_html} | 選股 = Top-{top_k} cross-sectional rank |
+        成本 = {cost_desc} | 回測期 = {m['years']:.1f} 年 | 因子 = Mom(20d)×3 + Trend(60MA)×1
     </div>
 
 </div>
