@@ -1413,6 +1413,10 @@ def parse_args():
         help='啟用流動性穩定度：排除突然爆量但平常不穩的標的'
     )
     parser.add_argument(
+        '--liq-mode', type=str, default='raw', choices=['raw', 'sector', 'demeaned'],
+        help='流動性穩定度模式：raw=全局, sector=行業中性, demeaned=殘差 (預設 raw)'
+    )
+    parser.add_argument(
         '--show-inst', action='store_true', default=True,
         help='在報表信號中顯示三大法人籌碼與新聞情緒標注 (預設開啟)'
     )
@@ -1489,6 +1493,7 @@ def main():
         residual_momentum=args.residual_momentum,
         trend_quality=args.trend_quality,
         liq_stability=args.liq_stability,
+        liq_mode=args.liq_mode,
         market_close=market_close,
     )
 

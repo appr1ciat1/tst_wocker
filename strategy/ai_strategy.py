@@ -136,6 +136,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
                       residual_momentum=False,
                       trend_quality=False,
                       liq_stability=False,
+                      liq_mode='raw',
                       market_close=None):
     """
     計算 AI 多維度特徵並做橫向百分位排名。
@@ -224,8 +225,30 @@ def engineer_features(close_df, vol_df, universe_mask=None,
     if liq_stability:
         try:
             turnover = close_df * vol_df
-            liq_stab = turnover.rolling(20).mean() / (turnover.rolling(20).std() + 1e-8)
-            print("   \U0001f4a7 流動性穩定度已計算")
+            raw_liq = turnover.rolling(20).mean() / (turnover.rolling(20).std() + 1e-8)
+
+            if liq_mode == 'demeaned':
+                # 殘差 liq: 扣除橫截面平均，保留個股相對穩定度
+                cross_mean = raw_liq.mean(axis=1)
+                liq_stab = raw_liq.sub(cross_mean, axis=0)
+                print("   \U0001f4a7 流動性穩定度已計算 (demeaned)")
+            elif liq_mode == 'sector':
+                # 行業中性: 電子 vs 非電子分開計算再合併
+                elec_prefixes = ('23','24','30','33','34','35','36','37',
+                                 '49','61','63','64','65','66','67','68','69')
+                elec_cols = [c for c in close_df.columns if str(c).startswith(elec_prefixes)]
+                non_elec_cols = [c for c in close_df.columns if c not in elec_cols]
+                liq_stab = raw_liq.copy()
+                if elec_cols:
+                    elec_mean = raw_liq[elec_cols].mean(axis=1)
+                    liq_stab[elec_cols] = raw_liq[elec_cols].sub(elec_mean, axis=0)
+                if non_elec_cols:
+                    ne_mean = raw_liq[non_elec_cols].mean(axis=1)
+                    liq_stab[non_elec_cols] = raw_liq[non_elec_cols].sub(ne_mean, axis=0)
+                print("   \U0001f4a7 流動性穩定度已計算 (sector-neutral)")
+            else:
+                liq_stab = raw_liq
+                print("   \U0001f4a7 流動性穩定度已計算 (raw)")
         except Exception:
             pass
 

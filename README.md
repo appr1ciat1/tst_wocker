@@ -91,29 +91,19 @@ python monte_carlo.py --runs 2000 --block-size 5
 
 ## CLI 參數
 
-### 核心（已鎖定）
+### 核心（已鎖定 — 35 組消融驗證）
 | 參數 | 預設值 | 說明 |
 |---|:---:|---|
 | `--tp-atr` | `4.0` | ATR 停利倍數 |
 | `--sl-atr` | `3.0` | ATR 停損倍數 |
 | `--top-k` | `7` | 每日最多進場股票數 |
-| `--hold-days` | `20` | 最大持倉交易日 |
+| `--hold-days` | `20` | 最大持倉交易日（12/15/25/30d 均劣） |
 | `--gap-filter` | `1.5` | 跳空過濾 ATR 倍數 |
 | `--universe-size` | `60` | 動態流動性 Universe 大小 |
-| `--regime-filter` | `true` | 大盤過濾 (0050 > 60MA) |
 | `--regime-graduated` | `true` | 四段式曝險 (100/70/40/0%) |
+| `--sector-max-pct` | `0.6` | 板塊分散上限 |
+| `--gap-aware-sizing` | `true` | v8.3: 跳空減倉 |
 | `--slippage` | `0.001` | 滑價 10bps |
-
-### 可選風控（opt-in, 經實測驗證效果）
-| 參數 | 預設值 | 實測結果 |
-|---|:---:|---|
-| `--sector-max-pct` | `1.0` | 0.5 可壓 MDD 至 -16.0% (Sharpe 持平) |
-| `--corr-filter` | `0.8` | 去除高度相關持倉 |
-| `--rank-weight` | `false` | 有害: Sharpe -27% |
-| `--regime-delev` | `false` | 有害: Sharpe -32%, 錯過反彈 |
-| `--dynamic-risk` | `false` | 中性: Sharpe ±2% |
-| `--inst-flow` | `0.0` | 籌碼因子權重（累積數據中，建議先用 0） |
-| `--show-inst` | `true` | 報表信號顯示籌碼/新聞標注 |
 
 ### 已驗證無效（永久排除）
 | 功能 | 影響 |
@@ -122,6 +112,11 @@ python monte_carlo.py --runs 2000 --block-size 5
 | `--trailing` | Sharpe → ~0.08 ☠️ |
 | `--ml-weights` | Sharpe -55% |
 | `--rank-weight` | Sharpe -27% |
+| `--confidence-k` | 零效果 |
+| `--mid-hold-review` | MDD 惡化 |
+| `--residual-momentum` | MDD -22.6% |
+| `--trend-quality` | Sharpe -17% |
+| FULL STACK | Sharpe 1.90 |
 
 ## v8.1 回測誠實化 — Lookahead 修正
 
