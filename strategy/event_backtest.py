@@ -108,6 +108,8 @@ class EventDrivenBacktester:
                  max_portfolio_heat=1.0,
                  rank_weighted=False,
                  regime_deleverage=False,
+                 confidence_k=False,
+                 mid_hold_review=False,
                  buy_cost=0.001425, sell_cost=0.004425):
         self.tp_pct = tp_pct
         self.sl_pct = sl_pct
@@ -140,6 +142,8 @@ class EventDrivenBacktester:
         self.max_portfolio_heat = max_portfolio_heat
         self.rank_weighted = rank_weighted
         self.regime_deleverage = regime_deleverage
+        self.confidence_k = confidence_k
+        self.mid_hold_review = mid_hold_review
         self.buy_cost = buy_cost
         self.sell_cost = sell_cost
 
@@ -345,6 +349,18 @@ class EventDrivenBacktester:
                     else:
                         exit_price = trade['tp_price']
                     exit_reason = "🟢 停利"
+                elif (self.mid_hold_review
+                      and 10 <= trade['days_held'] <= 14
+                      and current_close < trade['entry_price']):
+                    # Mid-hold review: 持有 10-14 天仍虧損，且動量已衰退→提早出場
+                    try:
+                        ticker_score = total_score[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+                        if not pd.isna(ticker_score) and ticker_score < threshold:
+                            exit_triggered = True
+                            exit_price = current_close
+                            exit_reason = "🟠 汰弱"
+                    except Exception:
+                        pass
                 elif trade['days_held'] >= self.max_hold_days:
                     exit_triggered = True
                     exit_price = current_close
@@ -613,7 +629,17 @@ class EventDrivenBacktester:
                             new_elec += 1
                     candidates = filtered_candidates
 
-                selected = candidates[:min(top_k, slots_available)]
+                # Confidence-K: 動態調整 top_k
+                effective_top_k = top_k
+                if self.confidence_k and len(candidates) >= 3:
+                    scores = [c[1] for c in candidates[:min(top_k + 3, len(candidates))]]
+                    top_score = scores[0]
+                    if top_score > 0:
+                        # 只選分數 >= top_score * 0.6 的候選
+                        quality_count = sum(1 for s in scores if s >= top_score * 0.6)
+                        effective_top_k = max(2, min(top_k, quality_count))
+
+                selected = candidates[:min(effective_top_k, slots_available)]
 
                 # 相關性過濾：去除與已選股/持倉高度相關的候選
                 if self.corr_filter > 0 and len(selected) > 1:

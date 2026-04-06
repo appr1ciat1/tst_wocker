@@ -1372,6 +1372,14 @@ def parse_args():
         help='籌碼因子權重 (預設 0 = 停用; 建議先用 0 觀察，累積數據後再加權)'
     )
     parser.add_argument(
+        '--confidence-k', action='store_true',
+        help='啟用 Confidence-K：根據分數品質動態調整 Top-K（分數差太大時少買）'
+    )
+    parser.add_argument(
+        '--mid-hold-review', action='store_true',
+        help='啟用中期汰弱：持有 10-14 天仍虧損且動量衰退→提早出場'
+    )
+    parser.add_argument(
         '--show-inst', action='store_true', default=True,
         help='在報表信號中顯示三大法人籌碼與新聞情緒標注 (預設開啟)'
     )
@@ -1479,6 +1487,8 @@ def main():
         max_portfolio_heat=args.max_heat,
         rank_weighted=args.rank_weight,
         regime_deleverage=args.regime_delev,
+        confidence_k=args.confidence_k,
+        mid_hold_review=args.mid_hold_review,
         buy_cost=args.buy_cost,
         sell_cost=args.sell_cost,
     )
