@@ -1,4 +1,4 @@
-# TW Stocker v7 — AI 量化交易系統
+# TW Stocker v8 — AI 量化交易系統
 
 中期橫截面動量策略，流動性 Universe 排名 + 事件驅動回測 + ATR 停利停損。
 經 Walk-Forward 驗證、100+ 組參數掃描、2000 次 Block Bootstrap Monte Carlo 壓力測試。
@@ -58,11 +58,16 @@
 ```bash
 pip install -r requirements.txt
 
-# v7 誠實回測（gap-aware + slippage 10bps）
-python ai_report.py
+# v8 誠實回測 + 籌碼標注
+python ai_report.py --show-inst
 
-# 比對舊版（無滑價，用於對比）
-python ai_report.py --slippage 0
+# 籌碼因子加權測試（建議累積 2 年數據後再啟用）
+python ai_report.py --inst-flow 0.5 --show-inst
+
+# Paper Trading v8
+python paper_trade.py signals --enrich    # 籌碼 + 新聞標注
+python paper_trade.py hardstop             # 組合 hard stop
+python paper_trade.py monthly              # 月報
 
 # Block Bootstrap 壓力測試
 python monte_carlo.py --runs 2000 --block-size 5
@@ -90,6 +95,8 @@ python monte_carlo.py --runs 2000 --block-size 5
 | `--rank-weight` | `false` | 有害: Sharpe -27% |
 | `--regime-delev` | `false` | 有害: Sharpe -32%, 錯過反彈 |
 | `--dynamic-risk` | `false` | 中性: Sharpe ±2% |
+| `--inst-flow` | `0.0` | 籌碼因子權重（累積數據中，建議先用 0） |
+| `--show-inst` | `false` | 報表信號顯示籌碼/新聞標注 |
 
 ### 已驗證無效（永久排除）
 | 功能 | 影響 |
@@ -125,24 +132,42 @@ v7: block_bootstrap(trades, block=5)  (保留一週的連續性)
 | + heat 2% | 0.84 | -21.1% | +11% | 97 |
 | + regime delev | 2.11 | -23.9% | +66% | 470 |
 
+## v8 新功能 — 籌碼因子 + Paper Trading 強化
+
+### 三大法人籌碼整合
+- 數據來源: [tw-institutional-stocker](https://github.com/voidful/tw-institutional-stocker)
+- 因子: `three_inst_ratio_change_20`（20 日持股變化 %）
+- 當前狀態: **標注模式**（weight=0）— 報表中顯示但不影響選股分數
+- 未來規劃: 累積 2 年數據後做 ablation，決定是否加入評分公式
+
+### Paper Trading v8
+| 命令 | 說明 |
+|------|------|
+| `signals --enrich` | 信號 + 籌碼/新聞標注 |
+| `hardstop` | 組合權益保護 (soft -10% / hard -15%) |
+| `monthly` | 月度績效報告 (Markdown) |
+| `alert` | 回測回撤警報 |
+
 ## 專案結構
 
 ```
 tw_stocker/
-├── ai_report.py              # 主程式 + CLI + HTML 報表 (v7)
+├── ai_report.py              # 主程式 + CLI + HTML 報表 (v8)
 ├── sweep.py                  # 季度參數校準 + 劣化警報 + Telegram
 ├── walk_forward.py           # Walk-Forward 穩定性驗證
 ├── monte_carlo.py            # Block Bootstrap 壓力測試 v3
-├── paper_trade.py            # Paper Trading + Telegram 通知
+├── paper_trade.py            # Paper Trading v8 + 籌碼標注 + 月報
 ├── strategy/
-│   ├── ai_strategy.py        # 因子工程 (Mom×3 + Trend×1)
+│   ├── ai_strategy.py        # 因子工程 (Mom×3 + Trend×1 + Inst×W)
 │   ├── event_backtest.py     # 事件驅動回測 + gap-aware fill + 風控
+│   ├── institutional_flow.py # 三大法人籌碼因子 (v8 新增)
+│   ├── news_sentiment.py     # 新聞情緒因子 (v8 新增)
 │   ├── risk_metrics.py       # 風險指標計算
 │   └── benchmark.py          # Benchmark (0050 / EW)
-├── artifacts/                # 每日 CSV
+├── artifacts/                # 每日 CSV + 月報
 ├── .github/workflows/
-│   └── update_ai_report.yml  # 每日 + 季度自動執行
-└── stock_report.html         # 完整交易報表 (v7)
+│   └── update_ai_report.yml  # 每日 + 月報 + 季度自動執行 (v8)
+└── stock_report.html         # 完整交易報表 (v8)
 ```
 
 ## 免責聲明

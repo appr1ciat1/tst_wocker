@@ -40,6 +40,8 @@ from strategy.ai_strategy import fetch_panel_data, engineer_features, build_liqu
 from strategy.event_backtest import EventDrivenBacktester
 from strategy.risk_metrics import compute_risk_metrics, format_metrics_summary
 from strategy.benchmark import fetch_benchmark, equal_weight_benchmark, compute_excess_return
+from strategy.institutional_flow import build_inst_flow_df, get_inst_flow_for_signals
+from strategy.news_sentiment import get_news_sentiment_for_signals
 
 # 嘗試載入 exchange_calendars
 try:
@@ -129,7 +131,7 @@ def get_next_n_trading_days(from_date, n_days):
 
 def generate_report(trades_df, equity_df, total_score, close_df, config,
                     metrics, benchmark_equity=None, ew_equity=None,
-                    high_df=None, low_df=None):
+                    high_df=None, low_df=None, show_inst=False):
     """
     產出 AI 交易計畫 HTML 報表與資金曲線圖（v2 完整版）。
 
@@ -261,6 +263,20 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 
     trading_plan_rows = ""
 
+    # 籌碼 + 新聞標注（opt-in）
+    inst_data = {}
+    news_data = {}
+    if show_inst:
+        all_tickers = [t for t, _, _ in selected] + [t for t, _, _ in not_selected[:5]]
+        try:
+            inst_data = get_inst_flow_for_signals(all_tickers)
+        except Exception:
+            inst_data = {}
+        try:
+            news_data = get_news_sentiment_for_signals(all_tickers)
+        except Exception:
+            news_data = {}
+
     # 顯示 Top-K 建議買進
     for rank, (ticker, score, price) in enumerate(selected, 1):
         # 使用精確 ATR（與回測引擎同公式）
@@ -323,10 +339,24 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         else:
             hist_badge = '<span style="font-size:0.72rem; color:#555;">歷史資料不足</span>'
 
+        # 籌碼 + 新聞標注
+        inst_badge = ''
+        if show_inst:
+            idata = inst_data.get(ticker, {})
+            ndata = news_data.get(ticker, {})
+            inst_change = idata.get('change', 0.0)
+            inst_label = idata.get('label', '⚪ 無資料')
+            news_label = ndata.get('label', '⚪ 中性')
+            inst_badge = (
+                f'<td><span style="font-size:0.75rem;">{inst_label}'
+                f'<br><span style="color:#888">{inst_change:+.1f}%</span></span></td>'
+                f'<td><span style="font-size:0.75rem;">{news_label}</span></td>'
+            )
+
         trading_plan_rows += (
             f'<tr><td>{ticker}</td><td>{score:.2f}</td>'
             f'<td>{price:.1f}</td><td>{status}</td><td>{plan}</td>'
-            f'<td>{hist_badge}</td></tr>\n'
+            f'<td>{hist_badge}</td>{inst_badge}</tr>\n'
         )
 
     # 顯示未被選入的候選（排名 > Top-K）
@@ -338,20 +368,32 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
             wr_color = '#00ff00' if ss['win_rate'] >= 50 else '#ff4444'
             hist_badge = f'<span style="font-size:0.72rem; color:#888;">勝率 <b style="color:{wr_color}">{ss["win_rate"]:.0f}%</b></span>'
 
+        inst_badge = ''
+        if show_inst:
+            idata = inst_data.get(ticker, {})
+            ndata = news_data.get(ticker, {})
+            inst_badge = (
+                f'<td><span style="font-size:0.72rem;">{idata.get("label", "⚪")}</span></td>'
+                f'<td><span style="font-size:0.72rem;">{ndata.get("label", "⚪")}</span></td>'
+            )
+
         trading_plan_rows += (
             f'<tr style="opacity:0.6"><td>{ticker}</td><td>{score:.2f}</td>'
             f'<td>{price:.1f}</td><td>{status}</td><td>-</td>'
-            f'<td>{hist_badge}</td></tr>\n'
+            f'<td>{hist_badge}</td>{inst_badge}</tr>\n'
         )
 
     # 顯示被過濾掉的（前 5 筆）
     for ticker, score, price, reason in filtered_out[:5]:
         status = f'<span style="color:#aaaaaa">⚪ 觀望 ({reason})</span>'
         price_str = f'{price:.1f}' if not pd.isna(price) else '-'
+        inst_badge = ''
+        if show_inst:
+            inst_badge = '<td>-</td><td>-</td>'
         trading_plan_rows += (
             f'<tr style="opacity:0.4"><td>{ticker}</td><td>{score:.2f}</td>'
             f'<td>{price_str}</td><td>{status}</td><td>-</td>'
-            f'<td>-</td></tr>\n'
+            f'<td>-</td>{inst_badge}</tr>\n'
         )
 
     # === 歷史交易紀錄（最近 20 筆）===
@@ -935,6 +977,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
                 <th>操作狀態</th>
                 <th>🎯 區間執行計畫</th>
                 <th>📊 歷史績效</th>
+{'                <th>\U0001F3DB\uFE0F 籌碼</th>' + chr(10) + '                <th>\U0001F4F0 新聞</th>' + chr(10) if show_inst else ''}
             </tr>
         </thead>
         <tbody>
@@ -1219,6 +1262,14 @@ def parse_args():
         '--regime-delev', action='store_true',
         help='啟用 Regime 降曝險 (預設停用; 實測顯示會錯過反彈)'
     )
+    parser.add_argument(
+        '--inst-flow', type=float, default=0.0,
+        help='籌碼因子權重 (預設 0 = 停用; 建議先用 0 觀察，累積數據後再加權)'
+    )
+    parser.add_argument(
+        '--show-inst', action='store_true',
+        help='在報表信號中顯示三大法人籌碼與新聞情緒標注'
+    )
 
     return parser.parse_args()
 
@@ -1259,12 +1310,24 @@ def main():
     else:
         universe_mask = None
 
+    # Phase 2.5: 籌碼數據（可選）
+    inst_flow_df = None
+    if args.inst_flow > 0 or args.show_inst:
+        try:
+            inst_flow_df, inst_ratio_df = build_inst_flow_df(
+                list(close_df.columns), close_df, verbose=True)
+        except Exception as e:
+            print(f"   ⚠️ 籌碼數據抓取失敗，跳過: {e}")
+            inst_flow_df = None
+
     # Phase 3: 特徵工程
     total_score, ma_60, atr_df, short_ma = engineer_features(
         close_df, vol_df, universe_mask,
         ma_period=args.ma_period,
         multi_ma=args.multi_ma,
         ml_weights=args.ml_weights,
+        inst_flow_weight=args.inst_flow,
+        inst_flow_df=inst_flow_df,
     )
 
     # Phase 3.5: 提前下載 0050 用於 regime filter
@@ -1344,7 +1407,8 @@ def main():
     }
     generate_report(trades_df, equity_df, total_score, close_df, config,
                     metrics, benchmark_equity, ew_equity,
-                    high_df=high_df, low_df=low_df)
+                    high_df=high_df, low_df=low_df,
+                    show_inst=args.show_inst)
     print("\n🚀 全部完成！請打開 stock_report.html 查看結果。")
 
 

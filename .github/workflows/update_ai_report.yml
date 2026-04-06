@@ -1,9 +1,11 @@
-name: AI Quant Trading Report v7.0
+name: AI Quant Trading Report v8.0
 
 on:
   schedule:
     # 每週一到五 UTC 09:00 執行（台灣時間 17:00 收盤後）
     - cron: '0 9 * * 1-5'
+    # 每月 1 日 UTC 10:00 跑月報
+    - cron: '0 10 1 * *'
   workflow_dispatch:
     inputs:
       tp_atr:
@@ -53,7 +55,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run AI Quant Pipeline v7.0
+      - name: Run AI Quant Pipeline v8.0
+        if: github.event.schedule != '0 10 1 * *'
         run: |
           python ai_report.py \
             --regime-filter \
@@ -62,7 +65,12 @@ jobs:
             --hold-days ${{ github.event.inputs.hold_days || '20' }} \
             --top-k ${{ github.event.inputs.top_k || '5' }} \
             --gap-filter ${{ github.event.inputs.gap_filter || '1.5' }} \
-            --days ${{ github.event.inputs.days || '1200' }}
+            --days ${{ github.event.inputs.days || '1200' }} \
+            --show-inst
+
+      - name: Monthly Paper Trading Report
+        if: github.event.schedule == '0 10 1 * *'
+        run: python paper_trade.py monthly
 
       - name: Cleanup old artifacts (keep last 180 days)
         run: |
@@ -80,7 +88,7 @@ jobs:
           git rebase origin/main
 
           git add -A
-          git commit -m "📊 AI Report v7.0 ($(date -u '+%Y-%m-%d'))" || echo "No changes"
+          git commit -m "📊 AI Report v8.0 ($(date -u '+%Y-%m-%d'))" || echo "No changes"
           git push origin HEAD:main
 
   # 每季第一週自動跑 sweep + Monte Carlo + Walk-Forward

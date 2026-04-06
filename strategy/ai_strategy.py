@@ -131,7 +131,8 @@ def build_liquid_universe(close_df, vol_df, top_n=50, lookback=20):
 
 def engineer_features(close_df, vol_df, universe_mask=None,
                       ma_period=60, short_ma_period=20, multi_ma=False,
-                      ml_weights=False):
+                      ml_weights=False, inst_flow_weight=0.0,
+                      inst_flow_df=None):
     """
     計算 AI 多維度特徵並做橫向百分位排名。
 
@@ -203,6 +204,20 @@ def engineer_features(close_df, vol_df, universe_mask=None,
         rank_vol = vol_surge.rank(axis=1, pct=True)
         rank_stab = stability.rank(axis=1, pct=True)
 
+    # === 籌碼因子排名 ===
+    rank_inst = None
+    if inst_flow_weight > 0 and inst_flow_df is not None:
+        # 對齊並排名
+        inst_aligned = inst_flow_df.reindex(
+            index=close_df.index, columns=close_df.columns
+        )
+        if universe_mask is not None:
+            masked_inst = inst_aligned.where(universe_mask)
+            rank_inst = masked_inst.rank(axis=1, pct=True)
+        else:
+            rank_inst = inst_aligned.rank(axis=1, pct=True)
+        print(f"   🏛️ 籌碼因子已載入 (weight={inst_flow_weight})")
+
     # === 因子加權 ===
     if ml_weights:
         total_score = _ml_factor_score(
@@ -211,6 +226,10 @@ def engineer_features(close_df, vol_df, universe_mask=None,
     else:
         # Method C: 動量主導 + 輕量趨勢確認 (交叉驗證最佳)
         total_score = rank_mom * 3 + rank_trend * 1
+
+    # 籌碼因子加權（opt-in）
+    if rank_inst is not None and inst_flow_weight > 0:
+        total_score = total_score + rank_inst * inst_flow_weight
 
     print("   ✅ 特徵計算完成")
     return total_score, ma_long, atr_df, short_ma
