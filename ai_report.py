@@ -1203,6 +1203,10 @@ def parse_args():
         '--sector-max-pct', type=float, default=1.0,
         help='單一板塊最大持倉比例 (預設 1.0 = 停用; 建議 0.5 = 50%% 可壓低 MDD)'
     )
+    parser.add_argument(
+        '--corr-filter', type=float, default=0,
+        help='相關性過濾門檻 (預設 0 = 停用; 建議 0.8 = 去除相關>0.8的重複股)'
+    )
 
     return parser.parse_args()
 
@@ -1286,6 +1290,7 @@ def main():
         consec_loss_limit=args.consec_loss_limit,
         consec_loss_pause=args.consec_loss_pause,
         sector_max_pct=args.sector_max_pct,
+        corr_filter=args.corr_filter,
         buy_cost=args.buy_cost,
         sell_cost=args.sell_cost,
     )

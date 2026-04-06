@@ -155,11 +155,37 @@ def main():
     print(sep)
     best = results[0]
     exit_code = 0
+    alerts = []
 
-    if baseline_sharpe and baseline_sharpe < 1.5:
-        print(f"\n🚨 警報：Baseline Sharpe {baseline_sharpe:.3f} < 1.5！策略可能已劣化")
-        print(f"   建議立即手動檢查市場環境與參數適配性")
+    if baseline_sharpe and baseline_sharpe < 1.8:
+        alerts.append(f"🚨 Baseline Sharpe {baseline_sharpe:.3f} < 1.8！策略可能已劣化")
         exit_code = 1
+
+    # MDD 檢查
+    baseline_result = next((r for r in results if r['name'] == 'baseline' or r['args'] == ''), None)
+    if baseline_result and baseline_result['mdd'] < -22:
+        alerts.append(f"🚨 Baseline MDD {baseline_result['mdd']:.1f}% < -22%！風險偏高")
+        exit_code = 1
+
+    if alerts:
+        for a in alerts:
+            print(f"\n{a}")
+        print(f"   建議立即手動檢查市場環境與參數適配性")
+        print(f"   暫停新倉直到問題排除")
+        # 嘗試發 Telegram 警報
+        try:
+            import os
+            import urllib.request
+            bot_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+            chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
+            if bot_token and chat_id:
+                msg = "⚠️ Sweep 警報\n" + "\n".join(alerts)
+                url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                data = urllib.parse.urlencode({'chat_id': chat_id, 'text': msg}).encode()
+                urllib.request.urlopen(url, data, timeout=10)
+                print("   📱 已發送 Telegram 警報")
+        except Exception:
+            pass
     elif baseline_sharpe and best['sharpe'] > baseline_sharpe * 1.05:
         print(f"\n⚠️  發現更優配置: {best['name']} (Sharpe {best['sharpe']:.3f} vs baseline {baseline_sharpe:.3f})")
         print(f"   建議命令: python ai_report.py {best['args']}")

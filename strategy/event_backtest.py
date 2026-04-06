@@ -103,6 +103,7 @@ class EventDrivenBacktester:
                  dd_pause_pct=0.10, dd_pause_days=5,
                  consec_loss_limit=3, consec_loss_pause=5,
                  sector_max_pct=0.6,
+                 corr_filter=0,
                  buy_cost=0.001425, sell_cost=0.004425):
         self.tp_pct = tp_pct
         self.sl_pct = sl_pct
@@ -130,6 +131,7 @@ class EventDrivenBacktester:
         self.consec_loss_limit = consec_loss_limit
         self.consec_loss_pause = consec_loss_pause
         self.sector_max_pct = sector_max_pct
+        self.corr_filter = corr_filter
         self.buy_cost = buy_cost
         self.sell_cost = sell_cost
 
@@ -531,6 +533,35 @@ class EventDrivenBacktester:
                     candidates = filtered_candidates
 
                 selected = candidates[:min(top_k, slots_available)]
+
+                # 相關性過濾：去除與已選股/持倉高度相關的候選
+                if self.corr_filter > 0 and len(selected) > 1:
+                    try:
+                        lookback = min(20, i)
+                        if lookback >= 10:
+                            sel_tickers = [s[0] for s in selected]
+                            all_held = list(active_trades.keys()) + sel_tickers
+                            ret_slice = close_df[all_held].iloc[max(0,i-lookback):i].pct_change().dropna()
+                            if len(ret_slice) >= 5:
+                                corr = ret_slice.corr()
+                                to_drop = set()
+                                for si in range(len(sel_tickers)):
+                                    if sel_tickers[si] in to_drop:
+                                        continue
+                                    for sj in range(si+1, len(sel_tickers)):
+                                        pair_corr = corr.loc[sel_tickers[si], sel_tickers[sj]] \
+                                            if sel_tickers[si] in corr.index and sel_tickers[sj] in corr.columns \
+                                            else 0
+                                        if pair_corr > self.corr_filter:
+                                            to_drop.add(sel_tickers[sj])
+                                if to_drop:
+                                    selected = [s for s in selected if s[0] not in to_drop]
+                                    # 補上被過濾掉的名額
+                                    remaining = [c for c in candidates if c[0] not in
+                                                 {s[0] for s in selected} and c[0] not in to_drop]
+                                    selected += remaining[:min(top_k, slots_available) - len(selected)]
+                    except Exception:
+                        pass
 
                 for ticker, score, entry_price in selected:
                     # 滑價模型：買入時價格略高
