@@ -149,17 +149,8 @@ class EventDrivenBacktester:
         tr1 = high_df - low_df
         tr2 = (high_df - prev_close).abs()
         tr3 = (low_df - prev_close).abs()
-        true_range = pd.concat([tr1, tr2, tr3]).groupby(level=0).max()
 
-        # 處理 MultiIndex 可能性：直接逐元素取 max
-        true_range = tr1.copy()
-        for idx in true_range.index:
-            for col in true_range.columns:
-                vals = [tr1.at[idx, col], tr2.at[idx, col], tr3.at[idx, col]]
-                vals = [v for v in vals if pd.notna(v)]
-                true_range.at[idx, col] = max(vals) if vals else np.nan
-
-        # 用更高效的方式：element-wise max
+        # element-wise max
         true_range = np.maximum(np.maximum(tr1, tr2), tr3)
         if isinstance(true_range, np.ndarray):
             true_range = pd.DataFrame(true_range, index=high_df.index, columns=high_df.columns)
@@ -390,7 +381,7 @@ class EventDrivenBacktester:
                     ticker_history[ticker].append(profit_pct)
 
                     # === 連續停損追蹤 ===
-                    if exit_reason == '停損':
+                    if '停損' in exit_reason:
                         consec_sl_count += 1
                         if consec_sl_count >= self.consec_loss_limit:
                             cl_pause_counter = self.consec_loss_pause
@@ -708,19 +699,19 @@ class EventDrivenBacktester:
                         shares = trade_amount / actual_entry
                         capital -= actual_cost
 
-                        # 計算 TP/SL 價格
+                        # 計算 TP/SL 價格（基於實際進場價含滑價）
                         if self.tp_sl_mode == 'atr' and atr is not None:
                             atr_val = atr[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
                             if pd.isna(atr_val) or atr_val <= 0:
                                 # fallback 到固定百分比
-                                tp_price = entry_price * (1 + self.tp_pct)
-                                sl_price = entry_price * (1 - self.sl_pct)
+                                tp_price = actual_entry * (1 + self.tp_pct)
+                                sl_price = actual_entry * (1 - self.sl_pct)
                             else:
-                                tp_price = entry_price + atr_val * self.tp_atr_mult
-                                sl_price = entry_price - atr_val * self.sl_atr_mult
+                                tp_price = actual_entry + atr_val * self.tp_atr_mult
+                                sl_price = actual_entry - atr_val * self.sl_atr_mult
                         else:
-                            tp_price = entry_price * (1 + self.tp_pct)
-                            sl_price = entry_price * (1 - self.sl_pct)
+                            tp_price = actual_entry * (1 + self.tp_pct)
+                            sl_price = actual_entry * (1 - self.sl_pct)
 
                         active_trades[ticker] = {
                             'shares': shares,
