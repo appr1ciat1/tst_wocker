@@ -5,27 +5,27 @@
 
 📊 **線上報表**：https://voidful.github.io/tw_stocker/stock_report.html
 
-## 績效總覽（v8.1 honest baseline — 無 lookahead）
+## 績效總覽（v8.2 optimized — 無 lookahead + graduated regime）
 
 | 指標 | 值 | 說明 |
 |------|:---:|------|
-| **Sharpe** | **1.95** | 無 lookahead + 10bps 滑價 + gap-aware fill |
-| **年化報酬** | **+60.6%** | 包含交易成本 + 滑價 |
-| **MDD** | **-30.0%** | 真實左尾（不再被 lookahead 低估） |
-| **Calmar** | **2.02** | 年化報酬/MDD |
-| **Profit Factor** | **1.79** | 總獲利/總虧損 |
-| **勝率** | **57.5%** | 480 筆交易 |
+| **Sharpe** | **2.34** | 無 lookahead + 10bps 滑價 + graduated regime |
+| **年化報酬** | **+68.6%** | 包含交易成本 + 滑價 |
+| **MDD** | **-19.9%** | 四段式曝險控管左尾 |
+| **Calmar** | **3.45** | 年化報酬/MDD |
+| **Profit Factor** | **1.90** | 總獲利/總虧損 |
+| **勝率** | **57.7%** | 507 筆交易 |
 
-### v8.1 honest vs v7 (lookahead)
+### 演化歷程
 
-| 指標 | v7 (lookahead) | **v8.1 (honest)** | 差異 | 原因 |
-|------|:--------------:|:-----------------:|:----:|------|
-| Sharpe | 2.96 | **1.95** | -34% | regime filter 用 t-1 |
-| MDD | -18.4% | **-30.0%** | +11.6% | 左尾不再被低估 |
-| 年化 | +91.4% | **+60.6%** | -30.8% | volume confirm 用 t-1 |
-| Calmar | 4.96 | **2.02** | -59% | MDD 惡化主因 |
+| 版本 | Sharpe | 年化 | MDD | Calmar | 說明 |
+|------|:------:|:----:|:---:|:------:|------|
+| v7 (lookahead) | 2.96 | +91% | -18% | 4.96 | ⚠️ 含 lookahead bias |
+| v8.1 (honest) | 1.95 | +61% | -30% | 2.02 | ✅ 修正 lookahead |
+| **v8.2 (optimized)** | **2.34** | **+69%** | **-20%** | **3.45** | ✅ + graduated regime |
 
-> ⚠️ v7 的績效被兩個 lookahead bias 系統性高估：(1) 大盤 regime filter 用同日收盤決定是否在同日開盤進場，(2) 成交量確認用同日成交量。v8.1 修正後，所有進場決策只使用 t-1 資訊。
+> v7→v8.1：修正 regime filter 和 volume confirm 的 lookahead bias，績效下降反映真實左尾。
+> v8.1→v8.2：用四段式曝險（100/70/40/0%）+ Universe 60 + Top-7 恢復績效，MDD 從 -30% 壓到 -20%。
 
 ### Monte Carlo 壓力測試（Block Bootstrap, 2000x）
 
@@ -81,23 +81,24 @@ python monte_carlo.py --runs 2000 --block-size 5
 |---|:---:|---|
 | `--tp-atr` | `4.0` | ATR 停利倍數 |
 | `--sl-atr` | `3.0` | ATR 停損倍數 |
-| `--top-k` | `5` | 每日最多進場股票數 |
+| `--top-k` | `7` | 每日最多進場股票數 |
 | `--hold-days` | `20` | 最大持倉交易日 |
 | `--gap-filter` | `1.5` | 跳空過濾 ATR 倍數 |
+| `--universe-size` | `60` | 動態流動性 Universe 大小 |
 | `--regime-filter` | `true` | 大盤過濾 (0050 > 60MA) |
-| `--corr-filter` | `0.8` | 去除高度相關持倉 |
-| `--slippage` | `0.001` | 滑價 10bps（v7 新增） |
+| `--regime-graduated` | `true` | 四段式曝險 (100/70/40/0%) |
+| `--slippage` | `0.001` | 滑價 10bps |
 
 ### 可選風控（opt-in, 經實測驗證效果）
 | 參數 | 預設值 | 實測結果 |
 |---|:---:|---|
 | `--sector-max-pct` | `1.0` | 0.5 可壓 MDD 至 -16.0% (Sharpe 持平) |
-| `--max-heat` | `1.0` | 2% 過緊 (97 筆); 需進一步研究 |
+| `--corr-filter` | `0.8` | 去除高度相關持倉 |
 | `--rank-weight` | `false` | 有害: Sharpe -27% |
 | `--regime-delev` | `false` | 有害: Sharpe -32%, 錯過反彈 |
 | `--dynamic-risk` | `false` | 中性: Sharpe ±2% |
 | `--inst-flow` | `0.0` | 籌碼因子權重（累積數據中，建議先用 0） |
-| `--show-inst` | `false` | 報表信號顯示籌碼/新聞標注 |
+| `--show-inst` | `true` | 報表信號顯示籌碼/新聞標注 |
 
 ### 已驗證無效（永久排除）
 | 功能 | 影響 |

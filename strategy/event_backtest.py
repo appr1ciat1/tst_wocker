@@ -94,7 +94,8 @@ class EventDrivenBacktester:
                  initial_capital=1_000_000, position_size=0.10,
                  tp_sl_mode='atr', tp_atr_mult=4.0, sl_atr_mult=3.0,
                  trailing_stop=False, trailing_atr_mult=2.0,
-                 regime_filter=False, gap_filter_atr=1.5,
+                 regime_filter=False, regime_graduated=False,
+                 gap_filter_atr=1.5,
                  volume_confirm=False,
                  blacklist_lookback=0, blacklist_min_wr=0.25,
                  breakeven_pct=0, slippage=0, vol_parity=False,
@@ -119,6 +120,7 @@ class EventDrivenBacktester:
         self.trailing_stop = trailing_stop
         self.trailing_atr_mult = trailing_atr_mult
         self.regime_filter = regime_filter
+        self.regime_graduated = regime_graduated
         self.gap_filter_atr = gap_filter_atr
         self.volume_confirm = volume_confirm
         self.blacklist_lookback = blacklist_lookback
@@ -241,8 +243,10 @@ class EventDrivenBacktester:
         # 大盤 60MA（regime filter）
         if self.regime_filter and market_close is not None:
             market_ma60 = market_close.rolling(60).mean()
+            market_ma20 = market_close.rolling(20).mean()
         else:
             market_ma60 = None
+            market_ma20 = None
 
         # 成交量 20 日均量
         if self.volume_confirm and vol_df is not None:
@@ -472,18 +476,35 @@ class EventDrivenBacktester:
             entry_allowed = (dd_pause_counter <= 0 and cl_pause_counter <= 0)
 
             if len(active_trades) < max_positions and entry_allowed:
-                # ── Regime Filter：大盤 < 60MA 時暫停所有進場 ──
-                # ━━ FIX: 使用 t-1 大盤數據（避免同日 lookahead——開盤時不知道今天收盤） ━━
+                # ── Regime Filter + Graduated Exposure ──
+                # ━━ FIX: 使用 t-1 大盤數據（避免同日 lookahead） ━━
                 regime_ok = True
+                regime_scale = 1.0  # 曝險縮放（graduated mode）
                 if market_ma60 is not None:
                     try:
                         prev_date = dates[i - 1]
                         mkt_date = market_close.index.get_indexer([prev_date], method='ffill')[0]
                         if mkt_date >= 0:
                             mkt_val = market_close.iloc[mkt_date]
-                            mkt_ma = market_ma60.iloc[mkt_date]
-                            if not pd.isna(mkt_val) and not pd.isna(mkt_ma):
-                                regime_ok = mkt_val > mkt_ma
+                            mkt_ma60 = market_ma60.iloc[mkt_date]
+                            mkt_ma20 = market_ma20.iloc[mkt_date] if market_ma20 is not None else np.nan
+                            if not pd.isna(mkt_val) and not pd.isna(mkt_ma60):
+                                if self.regime_graduated:
+                                    # 四段式曝險：100% / 70% / 40% / 0%
+                                    above_60 = mkt_val > mkt_ma60
+                                    above_20 = mkt_val > mkt_ma20 if not pd.isna(mkt_ma20) else above_60
+                                    if above_60 and above_20:
+                                        regime_scale = 1.0   # 強多頭：全力進場
+                                    elif above_60 and not above_20:
+                                        regime_scale = 0.7   # 轉弱警告：縮減 30%
+                                    elif not above_60 and above_20:
+                                        regime_scale = 0.4   # 初步轉強：保守進場
+                                    else:
+                                        regime_scale = 0.0   # 空頭：停止進場
+                                        regime_ok = False
+                                else:
+                                    # 傳統 binary：大盤 > 60MA 才進場
+                                    regime_ok = mkt_val > mkt_ma60
                     except Exception:
                         pass
 
@@ -655,7 +676,7 @@ class EventDrivenBacktester:
                         rank_weight = raw_weights[rank_idx] / total_w * len(selected)
 
                     # === 動態風險預算：根據近期 realized vol 調整 position size ===
-                    effective_pos_size = self.position_size * rank_weight
+                    effective_pos_size = self.position_size * rank_weight * regime_scale
                     if self.dynamic_risk and market_daily_ret is not None:
                         try:
                             mkt_idx = market_close.index.get_indexer([date], method='ffill')[0]

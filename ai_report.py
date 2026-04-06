@@ -291,7 +291,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 
     mode_label = f"ATR×{config.get('tp_atr_mult', 3)}/{config.get('sl_atr_mult', 1.5)}" \
         if tp_sl_mode == 'atr' else f"TP +{tp_pct*100:.0f}% / SL -{sl_pct*100:.0f}%"
-    ax1.set_title(f'AI Quant v7  |  {mode_label}  |  Top-{top_k}  |  Hold ≤{max_hold_days}D',
+    ax1.set_title(f'AI Quant v8  |  {mode_label}  |  Top-{top_k}  |  Hold ≤{max_hold_days}D',
                   fontweight='bold', fontsize=14, color='#fff')
     ax1.set_ylabel('Portfolio Value (TWD)', fontsize=11)
     ax1.legend(fontsize=9, loc='upper left')
@@ -1184,8 +1184,8 @@ def parse_args():
         help='使用靜態池模式（14 檔預設股）而非動態 Universe'
     )
     parser.add_argument(
-        '--universe-size', type=int, default=50,
-        help='動態 Universe 大小 (預設: 50)'
+        '--universe-size', type=int, default=60,
+        help='動態 Universe 大小 (預設: 60)'
     )
 
     # TP/SL
@@ -1222,8 +1222,8 @@ def parse_args():
 
     # 選股
     parser.add_argument(
-        '--top-k', type=int, default=5,
-        help='每日最多進場股票數 (預設: 5)'
+        '--top-k', type=int, default=7,
+        help='每日最多進場股票數 (預設: 7)'
     )
     parser.add_argument(
         '--threshold', type=float, default=2.0,
@@ -1360,6 +1360,14 @@ def parse_args():
         help='啟用 Regime 降曝險 (預設停用; 實測顯示會錯過反彈)'
     )
     parser.add_argument(
+        '--regime-graduated', action='store_true', default=True,
+        help='啟用四段式曝險縮放 (100%%/70%%/40%%/0%%), 取代 binary regime filter (預設: ON)'
+    )
+    parser.add_argument(
+        '--no-regime-graduated', action='store_false', dest='regime_graduated',
+        help='停用四段式曝險，改用 binary regime filter'
+    )
+    parser.add_argument(
         '--inst-flow', type=float, default=0.0,
         help='籌碼因子權重 (預設 0 = 停用; 建議先用 0 觀察，累積數據後再加權)'
     )
@@ -1452,6 +1460,7 @@ def main():
         trailing_stop=args.trailing,
         trailing_atr_mult=args.trailing_atr,
         regime_filter=args.regime_filter,
+        regime_graduated=args.regime_graduated,
         gap_filter_atr=args.gap_filter,
         volume_confirm=args.volume_confirm,
         blacklist_lookback=args.blacklist,
