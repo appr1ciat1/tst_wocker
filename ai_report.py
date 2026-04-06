@@ -1204,8 +1204,8 @@ def parse_args():
         help='單一板塊最大持倉比例 (預設 1.0 = 停用; 建議 0.5 = 50%% 可壓低 MDD)'
     )
     parser.add_argument(
-        '--corr-filter', type=float, default=0,
-        help='相關性過濾門檻 (預設 0 = 停用; 建議 0.8 = 去除相關>0.8的重複股)'
+        '--corr-filter', type=float, default=0.8,
+        help='相關性過濾門檻 (預設 0.8; 0 = 停用; 去除近 20 日相關>門檻的重複持倉)'
     )
 
     return parser.parse_args()
