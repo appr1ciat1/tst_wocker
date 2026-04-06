@@ -5,16 +5,16 @@
 
 📊 **線上報表**：https://voidful.github.io/tw_stocker/stock_report.html
 
-## 績效總覽（v8.2 optimized — 無 lookahead + graduated regime）
+## 績效總覽（v8.2 final — 無 lookahead + graduated regime + sector cap）
 
 | 指標 | 值 | 說明 |
 |------|:---:|------|
-| **Sharpe** | **2.34** | 無 lookahead + 10bps 滑價 + graduated regime |
-| **年化報酬** | **+68.6%** | 包含交易成本 + 滑價 |
-| **MDD** | **-19.9%** | 四段式曝險控管左尾 |
-| **Calmar** | **3.45** | 年化報酬/MDD |
-| **Profit Factor** | **1.90** | 總獲利/總虧損 |
-| **勝率** | **57.7%** | 507 筆交易 |
+| **Sharpe** | **2.30** | 無 lookahead + 10bps 滑價 + graduated regime + sector 60% |
+| **年化報酬** | **+62.7%** | 包含交易成本 + 滑價 |
+| **MDD** | **-16.9%** | 四段式曝險 + 板塊分散控管左尾 |
+| **Calmar** | **3.72** | 年化報酬/MDD |
+| **Profit Factor** | **1.82** | 總獲利/總虧損 |
+| **勝率** | **57.4%** | 507 筆交易 |
 
 ### 演化歷程
 
@@ -22,10 +22,11 @@
 |------|:------:|:----:|:---:|:------:|------|
 | v7 (lookahead) | 2.96 | +91% | -18% | 4.96 | ⚠️ 含 lookahead bias |
 | v8.1 (honest) | 1.95 | +61% | -30% | 2.02 | ✅ 修正 lookahead |
-| **v8.2 (optimized)** | **2.34** | **+69%** | **-20%** | **3.45** | ✅ + graduated regime |
+| v8.2 (graduated) | 2.21 | +64% | -19% | 3.39 | ✅ + graduated regime |
+| **v8.2 (final)** | **2.30** | **+63%** | **-17%** | **3.72** | ✅ + sector cap 60% |
 
-> v7→v8.1：修正 regime filter 和 volume confirm 的 lookahead bias，績效下降反映真實左尾。
-> v8.1→v8.2：用四段式曝險（100/70/40/0%）+ Universe 60 + Top-7 恢復績效，MDD 從 -30% 壓到 -20%。
+> v7→v8.1：修正 regime filter 和 volume confirm 的 lookahead bias。
+> v8.1→v8.2：四段式曝險 + Universe 60 + Top-7 + 板塊分散 60%。
 
 ### Monte Carlo 壓力測試（Block Bootstrap, 2000x, v8.2 honest）
 
@@ -41,11 +42,17 @@
 
 ```
 每日訊號:
-  1. Universe = 過去 20 日平均成交額 Top-50
+  1. Universe = 過去 20 日平均成交額 Top-60
   2. 綜合評分 = rank_momentum(20d) × 3 + rank_trend(60MA) × 1
-  3. 進場: score ≥ 2.0 AND close > 60MA AND 大盤 > 60MA
+  3. 進場: score ≥ 2.0 AND close > 60MA AND 大盤 regime ≥ 40%
   4. 跳空 > 1.5×ATR 的進場日跳過
-  5. Top-5 選股（相關性 > 0.8 的替換為不相關候選）
+  5. Top-7 選股（相關性 > 0.8 的替換為不相關候選）
+
+Graduated Regime (v8.2):
+  - 大盤 > 60MA + > 20MA → 100% 曝險
+  - 大盤 > 60MA + < 20MA →  70% 曝險（轉弱）
+  - 大盤 < 60MA + > 20MA →  40% 曝險（轉強）
+  - 大盤 < 60MA + < 20MA →   0% 停止進場
 
 出場 (gap-aware):
   - 停損: min(stop_price, open)  ← 隔夜跳空用開盤價
