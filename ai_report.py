@@ -888,6 +888,24 @@ def parse_args():
         help='啟用台指期空單對沖（熊市時模擬做空大盤）'
     )
 
+    # 風控竟日卡（預設停用，非動量策略可開啟）
+    parser.add_argument(
+        '--dd-pause-pct', type=float, default=1.0,
+        help='權益回撤暫停門檻 (預設 1.0 = 停用; 建議實盤設 0.15)'
+    )
+    parser.add_argument(
+        '--dd-pause-days', type=int, default=5,
+        help='回撤觸發後暫停新倉天數 (預設 5)'
+    )
+    parser.add_argument(
+        '--consec-loss-limit', type=int, default=99,
+        help='連續停損次數上限 (預設 99 = 停用; 建議實盤設 3)'
+    )
+    parser.add_argument(
+        '--consec-loss-pause', type=int, default=5,
+        help='連續停損後暫停天數 (預設 5)'
+    )
+
     return parser.parse_args()
 
 
@@ -965,6 +983,10 @@ def main():
         mean_reversion=args.mean_reversion,
         dynamic_risk=args.dynamic_risk,
         futures_hedge=args.futures_hedge,
+        dd_pause_pct=args.dd_pause_pct,
+        dd_pause_days=args.dd_pause_days,
+        consec_loss_limit=args.consec_loss_limit,
+        consec_loss_pause=args.consec_loss_pause,
         buy_cost=args.buy_cost,
         sell_cost=args.sell_cost,
     )

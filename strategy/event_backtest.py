@@ -74,6 +74,14 @@ class EventDrivenBacktester:
         啟用動態風險預算（根據近 20 日 realized vol 調整 position size）
     futures_hedge : bool
         啟用台指期空單對沖（大盤 < 60MA 時，模擬空單保護部位）
+    dd_pause_pct : float
+        權益回撤竟日卡門檻（預設 0.10 = 10%），回撤超此比率則暫停新進場 dd_pause_days 天
+    dd_pause_days : int
+        回撤觸發後暫停新倉天數（預設 5）
+    consec_loss_limit : int
+        連續停損筆數上限（預設 3），過此則暫停 consec_loss_pause 天
+    consec_loss_pause : int
+        連續停損後暫停天數（預設 5）
     buy_cost : float
         買進手續費率（預設 0.001425 = 0.1425%）
     sell_cost : float
@@ -90,6 +98,8 @@ class EventDrivenBacktester:
                  breakeven_pct=0, slippage=0, vol_parity=False,
                  mean_reversion=False, dynamic_risk=False,
                  futures_hedge=False,
+                 dd_pause_pct=0.10, dd_pause_days=5,
+                 consec_loss_limit=3, consec_loss_pause=5,
                  buy_cost=0.001425, sell_cost=0.004425):
         self.tp_pct = tp_pct
         self.sl_pct = sl_pct
@@ -112,6 +122,10 @@ class EventDrivenBacktester:
         self.mean_reversion = mean_reversion
         self.dynamic_risk = dynamic_risk
         self.futures_hedge = futures_hedge
+        self.dd_pause_pct = dd_pause_pct
+        self.dd_pause_days = dd_pause_days
+        self.consec_loss_limit = consec_loss_limit
+        self.consec_loss_pause = consec_loss_pause
         self.buy_cost = buy_cost
         self.sell_cost = sell_cost
 
@@ -252,6 +266,12 @@ class EventDrivenBacktester:
             # 5 日跌幅
             ret_5d = close_df / close_df.shift(5) - 1
 
+        # === 回撤竟日卡 + 連續停損追蹤 ===
+        peak_equity = self.initial_capital
+        dd_pause_counter = 0     # 回撤卡剩餘暫停天數
+        consec_sl_count = 0      # 連續停損筆數
+        cl_pause_counter = 0     # 連損卡剩餘暫停天數
+
         # 從第 60 天開始（確保技術指標已穩定）
         for i in range(60, len(dates)):
             date = dates[i]
@@ -344,6 +364,15 @@ class EventDrivenBacktester:
                         ticker_history[ticker] = []
                     ticker_history[ticker].append(profit_pct)
 
+                    # === 連續停損追蹤 ===
+                    if exit_reason == '停損':
+                        consec_sl_count += 1
+                        if consec_sl_count >= self.consec_loss_limit:
+                            cl_pause_counter = self.consec_loss_pause
+                            consec_sl_count = 0
+                    else:
+                        consec_sl_count = 0
+
             # 移除已出場的股票
             for t in exited_tickers:
                 del active_trades[t]
@@ -355,8 +384,22 @@ class EventDrivenBacktester:
                 if not pd.isna(close_val):
                     current_equity += trade['shares'] * close_val
 
+            # === 回撤竟日卡：權益距 peak 超過 N% 則暫停新倉 ===
+            peak_equity = max(peak_equity, current_equity)
+            current_dd = (current_equity - peak_equity) / peak_equity
+            if current_dd < -self.dd_pause_pct and dd_pause_counter <= 0:
+                dd_pause_counter = self.dd_pause_days
+
+            # 暫停計數器遞減
+            if dd_pause_counter > 0:
+                dd_pause_counter -= 1
+            if cl_pause_counter > 0:
+                cl_pause_counter -= 1
+
             # ── Step 3: 處理今日進場（根據昨日收盤信號，今日 open 進場） ──
-            if len(active_trades) < max_positions:
+            entry_allowed = (dd_pause_counter <= 0 and cl_pause_counter <= 0)
+
+            if len(active_trades) < max_positions and entry_allowed:
                 # ── Regime Filter：大盤 < 60MA 時暫停所有進場 ──
                 regime_ok = True
                 if market_ma60 is not None:
