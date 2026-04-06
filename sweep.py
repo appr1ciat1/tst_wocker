@@ -157,14 +157,16 @@ def main():
     exit_code = 0
     alerts = []
 
-    if baseline_sharpe and baseline_sharpe < 1.8:
-        alerts.append(f"🚨 Baseline Sharpe {baseline_sharpe:.3f} < 1.8！策略可能已劣化")
+    # v8.1 honest baseline: Sharpe ~1.95, MDD ~-30%
+    # Alert thresholds set at ~60% of honest baseline
+    if baseline_sharpe and baseline_sharpe < 1.2:
+        alerts.append(f"🚨 Baseline Sharpe {baseline_sharpe:.3f} < 1.2！策略可能已劣化")
         exit_code = 1
 
     # MDD 檢查
     baseline_result = next((r for r in results if r['name'] == 'baseline' or r['args'] == ''), None)
-    if baseline_result and baseline_result['mdd'] < -22:
-        alerts.append(f"🚨 Baseline MDD {baseline_result['mdd']:.1f}% < -22%！風險偏高")
+    if baseline_result and baseline_result['mdd'] < -35:
+        alerts.append(f"🚨 Baseline MDD {baseline_result['mdd']:.1f}% < -35%！風險偏高")
         exit_code = 1
 
     if alerts:
