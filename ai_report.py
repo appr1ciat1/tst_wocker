@@ -225,6 +225,7 @@ def _build_inst_section():
 
 def generate_report(trades_df, equity_df, total_score, close_df, config,
                     metrics, benchmark_equity=None, ew_equity=None,
+                    benchmark2_equity=None,
                     high_df=None, low_df=None, show_inst=True):
     """
     產出 AI 交易計畫 HTML 報表與資金曲線圖（v2 完整版）。
@@ -288,6 +289,13 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
             ew_scaled = ew_equity.loc[common_idx] * initial_capital
             ax1.plot(common_idx, ew_scaled, color='#ab47bc', lw=1.2, alpha=0.6,
                      label='Equal-Weight', linestyle=':')
+
+    if benchmark2_equity is not None and len(benchmark2_equity) > 0:
+        common_idx = equity_df.index.intersection(benchmark2_equity.index)
+        if len(common_idx) > 0:
+            bench2_scaled = benchmark2_equity.loc[common_idx] * initial_capital
+            ax1.plot(common_idx, bench2_scaled, color='#69f0ae', lw=1.5, alpha=0.8,
+                     label='00981A Buy & Hold', linestyle='-.')
 
     mode_label = f"ATR×{config.get('tp_atr_mult', 3)}/{config.get('sl_atr_mult', 1.5)}" \
         if tp_sl_mode == 'atr' else f"TP +{tp_pct*100:.0f}% / SL -{sl_pct*100:.0f}%"
@@ -557,6 +565,48 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         <div class="stat-card" style="border-left-color:{excess_color}">
             <div class="label">超額年化報酬 (α)</div>
             <div class="value" style="color:{excess_color}">{excess_ret:+.1f}%</div>
+        </div>
+    </div>"""
+        except Exception:
+            pass
+
+    # === 00981A Benchmark 比較 ===
+    benchmark2_stats_html = ""
+    if benchmark2_equity is not None and len(benchmark2_equity) > 20:
+        try:
+            from strategy.risk_metrics import compute_risk_metrics as _crm2
+            bench2_eq = pd.DataFrame({'Equity': benchmark2_equity * initial_capital},
+                                     index=benchmark2_equity.index)
+            bench2_m = _crm2(bench2_eq, pd.DataFrame(), initial_capital)
+            bm2_ann = bench2_m['ann_return'] * 100
+            bm2_mdd = bench2_m['max_drawdown_pct'] * 100
+            bm2_sharpe = bench2_m['sharpe']
+            # 計算共存期間超額
+            common_dates = equity_df.index.intersection(benchmark2_equity.index)
+            if len(common_dates) > 20:
+                strat_sub = equity_df.loc[common_dates, 'Equity']
+                bench2_sub = benchmark2_equity.loc[common_dates] * initial_capital
+                s_ret = (float(strat_sub.iloc[-1]) / float(strat_sub.iloc[0]) - 1) * 100
+                b_ret = (float(bench2_sub.iloc[-1]) / float(bench2_sub.iloc[0]) - 1) * 100
+                excess2 = s_ret - b_ret
+                e2_color = "#00ff00" if excess2 > 0 else "#ff4444"
+                benchmark2_stats_html = f"""
+    <div class="stats">
+        <div class="stat-card benchmark">
+            <div class="label">00981A 年化報酬</div>
+            <div class="value">{bm2_ann:+.1f}%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">00981A 最大回撤</div>
+            <div class="value">{bm2_mdd:.1f}%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">00981A Sharpe</div>
+            <div class="value">{bm2_sharpe:.2f}</div>
+        </div>
+        <div class="stat-card" style="border-left-color:{e2_color}">
+            <div class="label">超額 vs 00981A (共存期)</div>
+            <div class="value" style="color:{e2_color}">{excess2:+.1f}%</div>
         </div>
     </div>"""
         except Exception:
@@ -1084,6 +1134,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 
     <h2>📈 資金曲線 vs Benchmark</h2>
 {benchmark_stats_html}
+{benchmark2_stats_html}
     <img src="backtest_chart.png" alt="AI Quantitative Backtest Equity Curve with Benchmark">
 
     <h2>🌐 大盤環境診斷</h2>
@@ -1368,7 +1419,7 @@ def parse_args():
         help='停用四段式曝險，改用 binary regime filter'
     )
     parser.add_argument(
-        '--regime-floor', type=float, default=0.20,
+        '--regime-floor', type=float, default=0.30,
         help='空頭 regime 最低曝險下限 (0.0=完全停止, 0.2=維持20%%進場能力)'
     )
     parser.add_argument(
@@ -1565,6 +1616,7 @@ def main():
     # Phase 6: Benchmark
     print("\n📊 載入 Benchmark 進行比較...")
     benchmark_equity = fetch_benchmark('0050', days=args.days)
+    benchmark2_equity = fetch_benchmark('00981A', days=args.days)
     ew_equity = equal_weight_benchmark(close_df)
 
     # Phase 7: 報表產出
@@ -1585,6 +1637,7 @@ def main():
     }
     generate_report(trades_df, equity_df, total_score, close_df, config,
                     metrics, benchmark_equity, ew_equity,
+                    benchmark2_equity=benchmark2_equity,
                     high_df=high_df, low_df=low_df,
                     show_inst=args.show_inst)
     print("\n🚀 全部完成！請打開 stock_report.html 查看結果。")

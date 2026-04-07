@@ -5,16 +5,30 @@
 
 📊 **線上報表**：https://voidful.github.io/tw_stocker/stock_report.html
 
-## 績效總覽（v8.4 — sector 0.75 + regime floor + gap-aware）
+## 績效總覽（v8.4 — sector 0.75 + regime floor 30% + gap-aware）
 
 | 指標 | 值 | 說明 |
 |------|:---:|------|
-| **Sharpe** | **2.40** | 無 lookahead + 10bps 滑價 + graduated regime + sector 75% + gap-aware |
+| **Sharpe** | **2.38** | 無 lookahead + 10bps 滑價 + graduated regime + sector 75% + gap-aware |
 | **年化報酬** | **+62.8%** | 包含交易成本 + 滑價 |
-| **MDD** | **-15.7%** | 四段式曝險(含20%底線) + 板塊分散 + 跳空減倉 |
-| **Calmar** | **4.00** | 年化報酬/MDD |
+| **MDD** | **-15.5%** | 四段式曝險(含30%底線) + 板塊分散 + 跳空減倉 |
+| **Calmar** | **4.06** | 年化報酬/MDD |
 | **Profit Factor** | **1.74** | 總獲利/總虧損 |
 | **勝率** | **61.1%** | 562 筆交易 |
+
+### 雙 Benchmark 對比
+
+| | 策略 v8.4 | 0050 | 00981A |
+|---|:---:|:---:|:---:|
+| 全期年化 | **+63%** | +41% | N/A |
+| 全期 Sharpe | **2.43** | 1.79 | N/A |
+| 共存期總報酬 | **+135%** | +72% | +114% |
+| 共存期 Sharpe | **5.62** | 4.36 | 5.87 |
+| vs 0050 月勝率 | **64%** | — | — |
+| vs 00981A 月勝率 | 27% | — | — |
+
+> 策略在總報酬上全面跑贏兩個 benchmark。
+> 月勝率 vs 00981A 較低（27%），但策略靠大贏月（Oct +12%, Jan +27%）累積超額。
 
 ### 演化歷程
 
@@ -102,7 +116,7 @@ python monte_carlo.py --runs 2000 --block-size 5
 | `--gap-filter` | `1.5` | 跳空過濾 ATR 倍數 |
 | `--universe-size` | `60` | 動態流動性 Universe 大小 |
 | `--regime-graduated` | `true` | 四段式曝險 (100/70/40/20%) |
-| `--regime-floor` | `0.20` | v8.4: 弱勢最低曝險（不完全停手） |
+| `--regime-floor` | `0.30` | v8.4: 弱勢最低曝險（不完全停手） |
 | `--sector-max-pct` | `0.75` | v8.4: 板塊分散上限（放寬允許集中） |
 | `--gap-aware-sizing` | `true` | v8.3: 跳空減倉 |
 | `--slippage` | `0.001` | 滑價 10bps |

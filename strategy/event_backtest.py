@@ -95,7 +95,7 @@ class EventDrivenBacktester:
                  tp_sl_mode='atr', tp_atr_mult=4.0, sl_atr_mult=3.0,
                  trailing_stop=False, trailing_atr_mult=2.0,
                  regime_filter=False, regime_graduated=False,
-                 regime_floor=0.20,
+                 regime_floor=0.30,
                  gap_filter_atr=1.5,
                  volume_confirm=False,
                  blacklist_lookback=0, blacklist_min_wr=0.25,
