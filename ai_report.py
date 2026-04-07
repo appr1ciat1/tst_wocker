@@ -1340,7 +1340,7 @@ def parse_args():
         help='連續停損後暫停天數 (預設 5)'
     )
     parser.add_argument(
-        '--sector-max-pct', type=float, default=0.6,
+        '--sector-max-pct', type=float, default=0.75,
         help='單一板塊最大持倉比例 (預設 1.0 = 停用; 建議 0.5 = 50%% 可壓低 MDD)'
     )
     parser.add_argument(
@@ -1366,6 +1366,10 @@ def parse_args():
     parser.add_argument(
         '--no-regime-graduated', action='store_false', dest='regime_graduated',
         help='停用四段式曝險，改用 binary regime filter'
+    )
+    parser.add_argument(
+        '--regime-floor', type=float, default=0.20,
+        help='空頭 regime 最低曝險下限 (0.0=完全停止, 0.2=維持20%%進場能力)'
     )
     parser.add_argument(
         '--inst-flow', type=float, default=0.0,
@@ -1515,6 +1519,7 @@ def main():
         trailing_atr_mult=args.trailing_atr,
         regime_filter=args.regime_filter,
         regime_graduated=args.regime_graduated,
+        regime_floor=args.regime_floor,
         gap_filter_atr=args.gap_filter,
         volume_confirm=args.volume_confirm,
         blacklist_lookback=args.blacklist,

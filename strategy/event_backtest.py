@@ -95,6 +95,7 @@ class EventDrivenBacktester:
                  tp_sl_mode='atr', tp_atr_mult=4.0, sl_atr_mult=3.0,
                  trailing_stop=False, trailing_atr_mult=2.0,
                  regime_filter=False, regime_graduated=False,
+                 regime_floor=0.20,
                  gap_filter_atr=1.5,
                  volume_confirm=False,
                  blacklist_lookback=0, blacklist_min_wr=0.25,
@@ -103,7 +104,7 @@ class EventDrivenBacktester:
                  futures_hedge=False,
                  dd_pause_pct=0.10, dd_pause_days=5,
                  consec_loss_limit=3, consec_loss_pause=5,
-                 sector_max_pct=0.6,
+                 sector_max_pct=0.75,
                  corr_filter=0,
                  max_portfolio_heat=1.0,
                  rank_weighted=False,
@@ -129,6 +130,7 @@ class EventDrivenBacktester:
         self.trailing_atr_mult = trailing_atr_mult
         self.regime_filter = regime_filter
         self.regime_graduated = regime_graduated
+        self.regime_floor = regime_floor
         self.gap_filter_atr = gap_filter_atr
         self.volume_confirm = volume_confirm
         self.blacklist_lookback = blacklist_lookback
@@ -523,8 +525,11 @@ class EventDrivenBacktester:
                                     elif not above_60 and above_20:
                                         regime_scale = 0.4   # 初步轉強：保守進場
                                     else:
-                                        regime_scale = 0.0   # 空頭：停止進場
-                                        regime_ok = False
+                                        if self.regime_floor > 0:
+                                            regime_scale = self.regime_floor
+                                        else:
+                                            regime_scale = 0.0
+                                            regime_ok = False
                                 else:
                                     # 傳統 binary：大盤 > 60MA 才進場
                                     regime_ok = mkt_val > mkt_ma60

@@ -5,16 +5,16 @@
 
 📊 **線上報表**：https://voidful.github.io/tw_stocker/stock_report.html
 
-## 績效總覽（v8.3 — 無 lookahead + graduated regime + sector cap + gap-aware）
+## 績效總覽（v8.4 — sector 0.75 + regime floor + gap-aware）
 
 | 指標 | 值 | 說明 |
 |------|:---:|------|
-| **Sharpe** | **2.33** | 無 lookahead + 10bps 滑價 + graduated regime + sector 60% + gap-aware |
-| **年化報酬** | **+57.8%** | 包含交易成本 + 滑價 |
-| **MDD** | **-15.7%** | 四段式曝險 + 板塊分散 + 跳空減倉控管左尾 |
-| **Calmar** | **3.68** | 年化報酬/MDD |
-| **Profit Factor** | **1.87** | 總獲利/總虧損 |
-| **勝率** | **57.4%** | 505 筆交易 |
+| **Sharpe** | **2.40** | 無 lookahead + 10bps 滑價 + graduated regime + sector 75% + gap-aware |
+| **年化報酬** | **+62.8%** | 包含交易成本 + 滑價 |
+| **MDD** | **-15.7%** | 四段式曝險(含20%底線) + 板塊分散 + 跳空減倉 |
+| **Calmar** | **4.00** | 年化報酬/MDD |
+| **Profit Factor** | **1.74** | 總獲利/總虧損 |
+| **勝率** | **61.1%** | 562 筆交易 |
 
 ### 演化歷程
 
@@ -24,10 +24,11 @@
 | v8.1 (honest) | 1.95 | +61% | -30% | 2.02 | ✅ 修正 lookahead |
 | v8.2 (graduated) | 2.21 | +64% | -19% | 3.39 | ✅ + graduated regime |
 | v8.2 (sector cap) | 2.30 | +63% | -17% | 3.72 | ✅ + sector cap 60% |
-| **v8.3 (gap-aware)** | **2.33** | **+58%** | **-16%** | **3.68** | ✅ + gap-aware sizing |
+| v8.3 (gap-aware) | 2.33 | +58% | -16% | 3.68 | ✅ + gap-aware sizing |
+| **v8.4 (return opt)** | **2.40** | **+63%** | **-16%** | **4.00** | ✅ + sector 75% + regime floor 20% |
 
-> v7→v8.1：修正 lookahead bias。v8.1→v8.2：graduated regime + univ-60 + top-7 + sector 60%。
-> v8.2→v8.3：gap-aware sizing（跳空越大，進場倉位越小）。
+> v8.3→v8.4：sector cap 放寬至 75%（允許更多電子股集中），regime floor 20%（弱勢不完全停手）。
+> 近期 2/23~4/2 報酬：v8.3 +1.3% → v8.4 **+7.0%**
 
 ### Monte Carlo 壓力測試（Block Bootstrap, 2000x, v8.2 honest）
 
@@ -91,7 +92,7 @@ python monte_carlo.py --runs 2000 --block-size 5
 
 ## CLI 參數
 
-### 核心（已鎖定 — 35 組消融驗證）
+### 核心（已鎖定 — 50+ 組消融驗證）
 | 參數 | 預設值 | 說明 |
 |---|:---:|---|
 | `--tp-atr` | `4.0` | ATR 停利倍數 |
@@ -100,8 +101,9 @@ python monte_carlo.py --runs 2000 --block-size 5
 | `--hold-days` | `20` | 最大持倉交易日（12/15/25/30d 均劣） |
 | `--gap-filter` | `1.5` | 跳空過濾 ATR 倍數 |
 | `--universe-size` | `60` | 動態流動性 Universe 大小 |
-| `--regime-graduated` | `true` | 四段式曝險 (100/70/40/0%) |
-| `--sector-max-pct` | `0.6` | 板塊分散上限 |
+| `--regime-graduated` | `true` | 四段式曝險 (100/70/40/20%) |
+| `--regime-floor` | `0.20` | v8.4: 弱勢最低曝險（不完全停手） |
+| `--sector-max-pct` | `0.75` | v8.4: 板塊分散上限（放寬允許集中） |
 | `--gap-aware-sizing` | `true` | v8.3: 跳空減倉 |
 | `--slippage` | `0.001` | 滑價 10bps |
 
