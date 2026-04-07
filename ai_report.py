@@ -1483,6 +1483,10 @@ def parse_args():
         '--no-show-inst', dest='show_inst', action='store_false',
         help='關閉籌碼與新聞標注'
     )
+    parser.add_argument(
+        '--macro-regime', action='store_true',
+        help='啟用宏觀 Regime 疊加：VIX > 22/25/30 時降低曝險'
+    )
 
     return parser.parse_args()
 
@@ -1597,6 +1601,7 @@ def main():
         dynamic_sector_cap=args.dynamic_sector_cap,
         gap_aware_sizing=args.gap_aware_sizing,
         cluster_penalty=args.cluster_penalty,
+        macro_regime=args.macro_regime,
         buy_cost=args.buy_cost,
         sell_cost=args.sell_cost,
     )

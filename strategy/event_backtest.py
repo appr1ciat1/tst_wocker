@@ -117,6 +117,7 @@ class EventDrivenBacktester:
                  dynamic_sector_cap=False,
                  gap_aware_sizing=False,
                  cluster_penalty=False,
+                 macro_regime=False,
                  buy_cost=0.001425, sell_cost=0.004425):
         self.tp_pct = tp_pct
         self.sl_pct = sl_pct
@@ -158,6 +159,7 @@ class EventDrivenBacktester:
         self.dynamic_sector_cap = dynamic_sector_cap
         self.gap_aware_sizing = gap_aware_sizing
         self.cluster_penalty = cluster_penalty
+        self.macro_regime = macro_regime
         self.buy_cost = buy_cost
         self.sell_cost = sell_cost
 
@@ -244,6 +246,21 @@ class EventDrivenBacktester:
         self._universe_mask = universe_mask
         # 預計算 20MA 供 breadth 重用（避免迴圈內反覆 rolling）
         self._ma20_all = close_df.rolling(20).mean() if self.breadth_regime else None
+
+        # 宏觀 Regime：下載 VIX
+        self._vix_series = None
+        if self.macro_regime:
+            try:
+                import yfinance as yf
+                vix = yf.download('^VIX', start=close_df.index[0], end=close_df.index[-1], progress=False)
+                if 'Close' in vix.columns:
+                    self._vix_series = vix['Close'].squeeze()
+                elif ('Close', '^VIX') in vix.columns:
+                    self._vix_series = vix[('Close', '^VIX')].squeeze()
+                if self._vix_series is not None:
+                    print(f"   🌍 Macro Regime: VIX 已載入 ({len(self._vix_series)} 天)")
+            except Exception as e:
+                print(f"   ⚠️ VIX 下載失敗: {e}")
         # 計算精確 ATR（如果使用 ATR 模式）
         if self.tp_sl_mode == 'atr':
             if atr_df is None:
@@ -552,6 +569,22 @@ class EventDrivenBacktester:
                             regime_scale = min(regime_scale, 0.3)
                         elif breadth_pct < 0.45:
                             regime_scale = min(regime_scale, 0.5)
+                    except Exception:
+                        pass
+
+                # === Macro Regime：VIX 宏觀壓力調節 ===
+                if self.macro_regime and self._vix_series is not None and regime_ok:
+                    try:
+                        prev_date = dates[i - 1]
+                        vix_idx = self._vix_series.index.get_indexer([prev_date], method='ffill')[0]
+                        if vix_idx >= 0:
+                            vix_val = float(self._vix_series.iloc[vix_idx])
+                            if vix_val > 30:
+                                regime_scale *= 0.3   # 極端恋慌
+                            elif vix_val > 25:
+                                regime_scale *= 0.5   # 高度緊張
+                            elif vix_val > 22:
+                                regime_scale *= 0.7   # 警戒
                     except Exception:
                         pass
 
