@@ -929,8 +929,8 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 台股量化交易 v8.2 — {report_date}</title>
-    <meta name="description" content="AI 驅動的台股量化交易系統 v8.2，完整風險報告、Benchmark 對比、OCO 智慧掛單建議">
+    <title>AI 台股量化交易 v8.5 — {report_date}</title>
+    <meta name="description" content="AI 驅動的台股量化交易系統 v8.5，完整風險報告、Benchmark 對比、OCO 智慧掛單建議">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -1046,7 +1046,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 <body>
 <div class="container">
 
-    <h1>🎯 AI 台股量化交易 v8.2</h1>
+    <h1>🎯 AI 台股量化交易 v8.5</h1>
     <p class="subtitle">
         Event-Driven System &nbsp;|&nbsp; 報表日期: {report_date} &nbsp;|&nbsp;
         <span class="config-badge">🛡️ {mode_html}</span>
@@ -1190,7 +1190,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         ⚠️ <b>免責聲明：</b>本報表由 AI 量化模型自動產出，僅供學術研究與技術交流之用，
         不構成任何投資建議。歷史回測績效不代表未來實際報酬，投資有風險，決策請自行負責。
         <br><br>
-        <b>v8.2 方法論：</b>Entry = t+1 open | TP/SL = {mode_html} | 選股 = Top-{top_k} cross-sectional rank |
+        <b>v8.5 方法論：</b>Entry = t+1 open | TP/SL = {mode_html} | 選股 = Top-{top_k} cross-sectional rank |
         成本 = {cost_desc} | 回測期 = {m['years']:.1f} 年 | 因子 = Mom(20d)×3 + Trend(60MA)×1
     </div>
 
@@ -1223,7 +1223,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 def parse_args():
     """解析命令列參數。"""
     parser = argparse.ArgumentParser(
-        description='AI 台股量化交易系統 v8.2 — 事件驅動回測與交易計畫產生器'
+        description='AI 台股量化交易系統 v8.5 — 事件驅動回測與交易計畫產生器'
     )
     # 股池
     parser.add_argument(
@@ -1506,7 +1506,7 @@ def main():
     trailing_str = f" +Trailing({args.trailing_atr}×ATR)" if args.trailing else ""
 
     print("=" * 60)
-    print("🎯 AI 台股量化交易系統 v8.2")
+    print("🎯 AI 台股量化交易系統 v8.5")
     print("=" * 60)
     print(f"   股池: {mode_str}")
     print(f"   TP/SL: {tp_sl_str}{trailing_str}  Top-K: {args.top_k}  持倉上限: {args.hold_days} 天")
