@@ -1487,6 +1487,22 @@ def parse_args():
         '--macro-regime', action='store_true',
         help='啟用宏觀 Regime 疊加：VIX > 22/25/30 時降低曝險'
     )
+    parser.add_argument(
+        '--batch-entry', type=int, default=1,
+        help='分批建倉天數（1=單筆, 2=兩批, 3=三批）'
+    )
+    parser.add_argument(
+        '--dynamic-topk', action='store_true',
+        help='動態 Top-K：弱勢 Regime 自動降低持股數'
+    )
+    parser.add_argument(
+        '--dynamic-gap-filter', action='store_true',
+        help='動態 Gap Filter：強勢 Regime 放寬跳空限制至 2.0 ATR'
+    )
+    parser.add_argument(
+        '--dynamic-corr-filter', action='store_true',
+        help='動態相關性過濾：強勢 Regime 放寬至 0.85'
+    )
 
     return parser.parse_args()
 
@@ -1602,6 +1618,10 @@ def main():
         gap_aware_sizing=args.gap_aware_sizing,
         cluster_penalty=args.cluster_penalty,
         macro_regime=args.macro_regime,
+        batch_entry=args.batch_entry,
+        dynamic_topk=args.dynamic_topk,
+        dynamic_gap_filter=args.dynamic_gap_filter,
+        dynamic_corr_filter=args.dynamic_corr_filter,
         buy_cost=args.buy_cost,
         sell_cost=args.sell_cost,
     )

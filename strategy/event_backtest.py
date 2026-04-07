@@ -118,6 +118,10 @@ class EventDrivenBacktester:
                  gap_aware_sizing=False,
                  cluster_penalty=False,
                  macro_regime=False,
+                 batch_entry=1,
+                 dynamic_topk=False,
+                 dynamic_gap_filter=False,
+                 dynamic_corr_filter=False,
                  buy_cost=0.001425, sell_cost=0.004425):
         self.tp_pct = tp_pct
         self.sl_pct = sl_pct
@@ -160,6 +164,10 @@ class EventDrivenBacktester:
         self.gap_aware_sizing = gap_aware_sizing
         self.cluster_penalty = cluster_penalty
         self.macro_regime = macro_regime
+        self.batch_entry = batch_entry
+        self.dynamic_topk = dynamic_topk
+        self.dynamic_gap_filter = dynamic_gap_filter
+        self.dynamic_corr_filter = dynamic_corr_filter
         self.buy_cost = buy_cost
         self.sell_cost = sell_cost
 
@@ -619,7 +627,14 @@ class EventDrivenBacktester:
                             atr_val = atr[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
                             if not pd.isna(atr_val) and atr_val > 0:
                                 gap = abs(entry_price - prev_close)
-                                if gap > self.gap_filter_atr * atr_val:
+                                # Dynamic gap filter: 強勢 regime 放寬到 2.0 ATR
+                                eff_gap_limit = self.gap_filter_atr
+                                if self.dynamic_gap_filter:
+                                    if regime_scale >= 1.0:
+                                        eff_gap_limit = 2.0
+                                    elif regime_scale >= 0.7:
+                                        eff_gap_limit = 1.8
+                                if gap > eff_gap_limit * atr_val:
                                     continue
 
                         # ━━ FIX: 使用 t-1 成交量（避免同日 lookahead——開盤時不知道今天總量） ━━
@@ -751,13 +766,22 @@ class EventDrivenBacktester:
                         pass
 
                 effective_top_k = top_k
+                # Dynamic Top-K: 弱勢 regime 自動降低持股數
+                if self.dynamic_topk:
+                    if regime_scale <= 0.3:
+                        effective_top_k = max(2, top_k - 4)
+                    elif regime_scale <= 0.5:
+                        effective_top_k = max(3, top_k - 3)
+                    elif regime_scale <= 0.7:
+                        effective_top_k = max(4, top_k - 2)
+
                 if self.confidence_k and len(candidates) >= 3:
                     scores = [c[1] for c in candidates[:min(top_k + 3, len(candidates))]]
                     top_score = scores[0]
                     if top_score > 0:
                         # 只選分數 >= top_score * 0.6 的候選
                         quality_count = sum(1 for s in scores if s >= top_score * 0.6)
-                        effective_top_k = max(2, min(top_k, quality_count))
+                        effective_top_k = max(2, min(effective_top_k, quality_count))
 
                 # === Cluster-Penalized Selection ===
                 # 對候選股分數做 correlation-based soft penalty
@@ -794,7 +818,17 @@ class EventDrivenBacktester:
                 selected = candidates[:min(effective_top_k, slots_available)]
 
                 # 相關性過濾：去除與已選股/持倉高度相關的候選
-                if self.corr_filter > 0 and len(selected) > 1:
+                # Dynamic correlation filter: 強勢 regime 放寬閾值
+                eff_corr_filter = self.corr_filter
+                if self.dynamic_corr_filter and self.corr_filter > 0:
+                    if regime_scale >= 1.0:
+                        eff_corr_filter = min(0.85, self.corr_filter + 0.05)
+                    elif regime_scale >= 0.7:
+                        eff_corr_filter = self.corr_filter  # 維持原值
+                    else:
+                        eff_corr_filter = max(0.6, self.corr_filter - 0.1)
+
+                if eff_corr_filter > 0 and len(selected) > 1:
                     try:
                         lookback = min(20, i)
                         if lookback >= 10:
@@ -811,7 +845,7 @@ class EventDrivenBacktester:
                                         pair_corr = corr.loc[sel_tickers[si], sel_tickers[sj]] \
                                             if sel_tickers[si] in corr.index and sel_tickers[sj] in corr.columns \
                                             else 0
-                                        if pair_corr > self.corr_filter:
+                                        if pair_corr > eff_corr_filter:
                                             to_drop.add(sel_tickers[sj])
                                 if to_drop:
                                     selected = [s for s in selected if s[0] not in to_drop]
@@ -857,7 +891,14 @@ class EventDrivenBacktester:
                         rank_weight = raw_weights[rank_idx] / total_w * len(selected)
 
                     # === 動態風險預算：根據近期 realized vol 調整 position size ===
-                    effective_pos_size = self.position_size * rank_weight * regime_scale * gap_scale
+                    # Batch entry: 分批建倉，Day1 只進部分倉位
+                    batch_scale = 1.0
+                    if self.batch_entry > 1:
+                        # 剩餘批次由後續幾天的 pending_batches 自動追蹤
+                        weights = {2: [0.55, 0.45], 3: [0.45, 0.30, 0.25]}
+                        batch_scale = weights.get(self.batch_entry, [1.0/self.batch_entry]*self.batch_entry)[0]
+
+                    effective_pos_size = self.position_size * rank_weight * regime_scale * gap_scale * batch_scale
                     if self.dynamic_risk and market_daily_ret is not None:
                         try:
                             mkt_idx = market_close.index.get_indexer([date], method='ffill')[0]
