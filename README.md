@@ -1,7 +1,7 @@
-# TW Stocker v8 — AI 量化交易系統
+# TW Stocker v8.4 — AI 量化交易系統 *(Ablation-Proven Local Optimum)*
 
 中期橫截面動量策略，流動性 Universe 排名 + 事件驅動回測 + ATR 停利停損。
-經 Walk-Forward 驗證、100+ 組參數掃描、2000 次 Block Bootstrap Monte Carlo 壓力測試。
+經 Walk-Forward 驗證、100+ 組參數掃描、**三波 13 組消融實驗（全敗）**、2000 次 Block Bootstrap Monte Carlo 壓力測試。
 
 📊 **線上報表**：https://voidful.github.io/tw_stocker/stock_report.html
 
