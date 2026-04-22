@@ -145,7 +145,11 @@ def engineer_features(close_df, vol_df, universe_mask=None,
                       trend_quality=False,
                       liq_stability=False,
                       liq_mode='raw',
-                      market_close=None):
+                      market_close=None,
+                      rsi_weight=0.0,
+                      breakout_weight=0.0,
+                      value_weight=0.0,
+                      rev_momentum_weight=0.0):
     """
     計算 AI 多維度特徵並做橫向百分位排名。
 
@@ -281,6 +285,47 @@ def engineer_features(close_df, vol_df, universe_mask=None,
         rank_inst = _rank(inst_aligned)
         print(f"   \U0001f3db\ufe0f 籌碼因子已載入 (weight={inst_flow_weight})")
 
+    # === FinLab 啟發因子（可選） ===
+    rank_rsi = None
+    rank_breakout = None
+    rank_value = None
+    rank_rev_mom = None
+
+    if rsi_weight > 0:
+        try:
+            from strategy.finlab_factors import compute_rsi_rank
+            rank_rsi = compute_rsi_rank(close_df, period=20, universe_mask=universe_mask)
+            print(f"   📈 RSI-20 因子已計算 (weight={rsi_weight})")
+        except Exception as e:
+            print(f"   ⚠️ RSI 因子計算失敗: {e}")
+
+    if breakout_weight > 0:
+        try:
+            from strategy.finlab_factors import compute_breakout_rank
+            rank_breakout = compute_breakout_rank(close_df, window=300, universe_mask=universe_mask)
+            print(f"   🏔️ Breakout-300 因子已計算 (weight={breakout_weight})")
+        except Exception as e:
+            print(f"   ⚠️ Breakout 因子計算失敗: {e}")
+
+    if value_weight > 0:
+        try:
+            from strategy.finlab_factors import compute_value_rank
+            rank_value = compute_value_rank(
+                close_df, universe_mask=universe_mask,
+                tickers=list(close_df.columns),
+            )
+            print(f"   💰 Value (PB+PE) 因子已計算 (weight={value_weight})")
+        except Exception as e:
+            print(f"   ⚠️ Value 因子計算失敗: {e}")
+
+    if rev_momentum_weight > 0:
+        try:
+            from strategy.finlab_factors import compute_revenue_momentum
+            rank_rev_mom = compute_revenue_momentum(close_df, period=60, universe_mask=universe_mask)
+            print(f"   📊 RevMomentum-60 因子已計算 (weight={rev_momentum_weight})")
+        except Exception as e:
+            print(f"   ⚠️ RevMomentum 因子計算失敗: {e}")
+
     # === 因子加權 ===
     if ml_weights:
         # NOTE: ml_weights 已驗證無效 (Sharpe -55%), 保留但加警告
@@ -297,6 +342,16 @@ def engineer_features(close_df, vol_df, universe_mask=None,
         total_score = mom_factor * 3 + trend_factor * 1
         if rank_liq is not None:
             total_score = total_score + rank_liq * 0.3
+
+        # FinLab 因子加權（opt-in，預設全部為 0 不影響 baseline）
+        if rank_rsi is not None and rsi_weight > 0:
+            total_score = total_score + rank_rsi * rsi_weight
+        if rank_breakout is not None and breakout_weight > 0:
+            total_score = total_score + rank_breakout * breakout_weight
+        if rank_value is not None and value_weight > 0:
+            total_score = total_score + rank_value * value_weight
+        if rank_rev_mom is not None and rev_momentum_weight > 0:
+            total_score = total_score + rank_rev_mom * rev_momentum_weight
 
     # 籌碼因子加權（opt-in）
     if rank_inst is not None and inst_flow_weight > 0:

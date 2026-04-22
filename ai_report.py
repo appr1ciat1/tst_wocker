@@ -1335,7 +1335,7 @@ def parse_args():
 
     # 資金
     parser.add_argument(
-        '--capital', type=float, default=1_000_000,
+        '--capital', type=float, default=200_000,
         help='初始模擬資金 (預設: 1000000)'
     )
     parser.add_argument(
@@ -1523,6 +1523,23 @@ def parse_args():
         '--tilt-windows', type=str, default='10,15,20',
         help='板塊動量計算窗口 (逗號分隔, 預設 10,15,20)'
     )
+    # === FinLab 啟發因子（Phase 8: 新因子維度）===
+    parser.add_argument(
+        '--rsi-weight', type=float, default=0.0,
+        help='RSI-20 動量因子權重 (預設 0 = 停用; FinLab 用 RSI 選最強 20 檔)'
+    )
+    parser.add_argument(
+        '--breakout-weight', type=float, default=0.0,
+        help='300日創新高突破因子權重 (預設 0 = 停用; FinLab 年化 ~32%%)'
+    )
+    parser.add_argument(
+        '--value-weight', type=float, default=0.0,
+        help='PE/PB 價值因子權重 (預設 0 = 停用; FinLab 雙渦輪核心)'
+    )
+    parser.add_argument(
+        '--rev-momentum-weight', type=float, default=0.0,
+        help='60日營收動能代理因子權重 (預設 0 = 停用; FinLab MEMORY.md 鐵律)'
+    )
 
     return parser.parse_args()
 
@@ -1600,6 +1617,10 @@ def main():
         liq_stability=args.liq_stability,
         liq_mode=args.liq_mode,
         market_close=market_close,
+        rsi_weight=args.rsi_weight,
+        breakout_weight=args.breakout_weight,
+        value_weight=args.value_weight,
+        rev_momentum_weight=args.rev_momentum_weight,
     )
 
     # Phase 4: 事件驅動回測

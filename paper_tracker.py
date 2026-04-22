@@ -29,8 +29,8 @@ def load_data():
             return json.load(f)
     return {
         'start_date': date.today().isoformat(),
-        'initial_capital': 1_000_000,
-        'capital': 1_000_000,
+        'initial_capital': 200_000,
+        'capital': 200_000,
         'positions': {},          # {ticker: {entry, tp, sl, entry_date, shares, day_count}}
         'closed_trades': [],      # [{ticker, entry, exit, pnl_pct, reason, entry_date, exit_date}]
         'equity_curve': [],       # [{date, equity, capital, n_positions}]
@@ -483,7 +483,7 @@ new Chart(ctx, {{
         }},
         scales: {{
             x: {{ ticks: {{ color: '#64748b', maxTicksLimit: 10 }}, grid: {{ color: '#1e293b' }} }},
-            y: {{ ticks: {{ color: '#64748b', callback: v => (v/1000000).toFixed(2)+'M' }}, grid: {{ color: '#1e293b' }} }},
+            y: {{ ticks: {{ color: '#64748b', callback: v => (v/1000).toFixed(0)+'K' }}, grid: {{ color: '#1e293b' }} }},
         }}
     }}
 }});
