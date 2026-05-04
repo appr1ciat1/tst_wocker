@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Paper Trading v8.5 — 2026-05-01</title>
+    <title>Paper Trading v8.5 — 2026-05-04</title>
     <meta name="description" content="TW Stocker v8.5 Paper Trading 實時績效追蹤">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <style>
@@ -92,21 +92,21 @@
     <h1>📈 Paper Trading v8.5</h1>
     <p class="subtitle">
         <span class="badge badge-live">● LIVE</span>
-        起始日 2026-04-22 | 更新 2026-05-01 | 初始資金 200,000
+        起始日 2026-04-22 | 更新 2026-05-04 | 初始資金 200,000
     </p>
 
     <div class="metrics">
         <div class="metric">
             <div class="label">總權益</div>
-            <div class="value green">207,261</div>
+            <div class="value green">209,021</div>
         </div>
         <div class="metric">
             <div class="label">總報酬</div>
-            <div class="value green">+3.6%</div>
+            <div class="value green">+4.5%</div>
         </div>
         <div class="metric">
             <div class="label">年化報酬</div>
-            <div class="value green">+130.7%</div>
+            <div class="value green">+142.1%</div>
         </div>
         <div class="metric">
             <div class="label">最大回撤</div>
@@ -118,11 +118,11 @@
         </div>
         <div class="metric">
             <div class="label">交易數</div>
-            <div class="value blue">1</div>
+            <div class="value blue">2</div>
         </div>
         <div class="metric">
             <div class="label">Profit Factor</div>
-            <div class="value green">3551.00</div>
+            <div class="value green">5666.00</div>
         </div>
         <div class="metric">
             <div class="label">持倉數</div>
@@ -146,7 +146,7 @@
             <td>480.9</td>
             <td>343.7</td>
             <td>2026-04-22</td>
-            <td>6天</td>
+            <td>7天</td>
         </tr>
         <tr>
             <td><b>2383</b></td>
@@ -154,7 +154,7 @@
             <td>4902.0</td>
             <td>3437.2</td>
             <td>2026-04-22</td>
-            <td>6天</td>
+            <td>7天</td>
         </tr>
         <tr>
             <td><b>6285</b></td>
@@ -162,7 +162,7 @@
             <td>309.2</td>
             <td>190.7</td>
             <td>2026-04-22</td>
-            <td>6天</td>
+            <td>7天</td>
         </tr>
         <tr>
             <td><b>2308</b></td>
@@ -170,15 +170,7 @@
             <td>2368.0</td>
             <td>1750.2</td>
             <td>2026-04-22</td>
-            <td>6天</td>
-        </tr>
-        <tr>
-            <td><b>3443</b></td>
-            <td>3675.0</td>
-            <td>4413.0</td>
-            <td>3121.5</td>
-            <td>2026-04-22</td>
-            <td>6天</td>
+            <td>7天</td>
         </tr>
         <tr>
             <td><b>2345</b></td>
@@ -186,7 +178,7 @@
             <td>2660.0</td>
             <td>1855.0</td>
             <td>2026-04-22</td>
-            <td>6天</td>
+            <td>7天</td>
         </tr>
         <tr>
             <td><b>3037</b></td>
@@ -194,7 +186,15 @@
             <td>1071.3</td>
             <td>741.8</td>
             <td>2026-04-30</td>
-            <td>1天</td>
+            <td>2天</td>
+        </tr>
+        <tr>
+            <td><b>3443</b></td>
+            <td>4685.0</td>
+            <td>5657.0</td>
+            <td>3956.0</td>
+            <td>2026-05-04</td>
+            <td>0天</td>
         </tr>
         </table>
     </div>
@@ -204,6 +204,15 @@
         <table>
             <tr><th>日期</th><th>股票</th><th>進場</th><th>出場</th><th>損益</th><th>原因</th><th>持有</th></tr>
             
+        <tr>
+            <td>2026-05-04</td>
+            <td><b>3443</b></td>
+            <td>3675.0</td>
+            <td>4413.0</td>
+            <td style="color:#4ade80;font-weight:700">+20.1%</td>
+            <td>TP</td>
+            <td>7天</td>
+        </tr>
         <tr>
             <td>2026-04-30</td>
             <td><b>3037</b></td>
@@ -227,10 +236,10 @@ const ctx = document.getElementById('equityChart').getContext('2d');
 new Chart(ctx, {
     type: 'line',
     data: {
-        labels: ["2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-29", "2026-04-30", "2026-05-01"],
+        labels: ["2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-29", "2026-04-30", "2026-05-01", "2026-05-04"],
         datasets: [{
             label: 'Paper Trading 權益',
-            data: [198952.0, 198438.0, 203189.0, 204266.0, 202703.0, 207261.0, 207261.0],
+            data: [198952.0, 198438.0, 203189.0, 204266.0, 202703.0, 207261.0, 207261.0, 209021.0],
             borderColor: '#60a5fa',
             backgroundColor: 'rgba(96, 165, 250, 0.1)',
             fill: true,
@@ -239,7 +248,7 @@ new Chart(ctx, {
             borderWidth: 2,
         }, {
             label: '初始資金',
-            data: [200000, 200000, 200000, 200000, 200000, 200000, 200000],
+            data: [200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000],
             borderColor: '#475569',
             borderDash: [5, 5],
             fill: false,
