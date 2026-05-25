@@ -109,7 +109,7 @@ CRISIS_PERIODS = {
 
 def run_sr_backtest(start_date, end_date, eval_start=None):
     """跑 Sector Rotation v2 回測。"""
-    cmd = (f'python3 sector_rotation_report.py '
+    cmd = (f'{sys.executable} sector_rotation_report.py '
            f'--start-date {start_date} --end-date {end_date}')
     if eval_start:
         cmd += f' --eval-start {eval_start}'
@@ -126,7 +126,7 @@ def run_sr_backtest(start_date, end_date, eval_start=None):
 
 def run_v85_backtest(start_date, end_date, eval_start=None):
     """跑 v8.5 momentum 回測。"""
-    cmd = (f'python3 ai_report.py '
+    cmd = (f'{sys.executable} ai_report.py '
            f'--start-date {start_date} --end-date {end_date}')
     if eval_start:
         cmd += f' --eval-start {eval_start}'

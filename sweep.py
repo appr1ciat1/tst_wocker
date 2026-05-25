@@ -21,7 +21,7 @@ from itertools import product
 
 def run_backtest(args_str):
     """Run ai_report.py with given args and extract metrics."""
-    cmd = f'python ai_report.py {args_str}'
+    cmd = f'{sys.executable} ai_report.py {args_str}'
     r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=180)
     out = r.stdout + r.stderr
     if r.returncode != 0:

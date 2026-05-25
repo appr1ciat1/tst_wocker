@@ -66,7 +66,7 @@ CRISIS_PERIODS = {
 
 def run_backtest_range(start_date, end_date, eval_start=None):
     """Run ai_report.py with explicit date range and extract metrics."""
-    cmd = (f'python3 ai_report.py '
+    cmd = (f'{sys.executable} ai_report.py '
            f'--start-date {start_date} --end-date {end_date}')
     if eval_start:
         cmd += f' --eval-start {eval_start}'

@@ -9,9 +9,10 @@ Monte Carlo 壓力測試 v3 — Equity-Curve Bootstrap
   因為每日報酬率已經是完整回測引擎跑出來的結果。
 
 使用方式:
-  python monte_carlo.py                      # 預設 2000 次, block=20
+  python monte_carlo.py --equity artifacts/equity_YYYYMMDD.csv
   python monte_carlo.py --runs 5000          # 更精確
   python monte_carlo.py --block-size 10      # 較短區塊
+  python monte_carlo.py --seed 7             # 固定抽樣 seed
   python monte_carlo.py --legacy             # 舊版單筆 bootstrap (保留做比較)
 """
 
@@ -204,7 +205,11 @@ def main():
                         help='明確指定 equity CSV，例如 artifacts/equity_20260525.csv')
     parser.add_argument('--trades', type=str, default=None,
                         help='legacy 模式使用的 trades CSV；未提供則讀取最新 trades CSV')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='隨機種子，讓 bootstrap 結果可重現 (預設: 42)')
     args = parser.parse_args()
+
+    random.seed(args.seed)
 
     # === Equity-Curve Bootstrap ===
     equity = get_equity_curve(args.equity)
@@ -225,6 +230,7 @@ def main():
     print(f"   資料：{n_days} 個交易日的每日組合報酬率")
     print(f"   區塊大小：{args.block_size} 天 (保留時序自相關)")
     print(f"   模擬次數：{args.runs}")
+    print(f"   Seed：{args.seed}")
     print()
     print(f"   ⚠️  方法論說明：")
     print(f"      本工具對已完成回測的「每日組合報酬率」做 block bootstrap。")
@@ -272,11 +278,11 @@ def main():
         print(f"   ⚠️  最差 5% 總報酬為負 ({worst_ret*100:+.1f}%)")
 
     if abs(worst_mdd) < 0.25:
-        print(f"   ✅ 最差 5% MDD = {worst_mdd*100:.1f}% (< -25%)")
+        print(f"   ✅ 最差 5% MDD = {worst_mdd*100:.1f}% (優於 -25%)")
     elif abs(worst_mdd) < 0.40:
-        print(f"   ⚠️  最差 5% MDD = {worst_mdd*100:.1f}% (-25% ~ -40%)")
+        print(f"   ⚠️  最差 5% MDD = {worst_mdd*100:.1f}% (介於 -25% ~ -40%)")
     else:
-        print(f"   🚨 最差 5% MDD = {worst_mdd*100:.1f}% (> -40%，嚴重風險)")
+        print(f"   🚨 最差 5% MDD = {worst_mdd*100:.1f}% (低於 -40%，嚴重風險)")
 
     print(f"   {'✅' if median_sharpe > 1.5 else '⚠️'} "
           f"中位數 Sharpe = {median_sharpe:.2f}")
