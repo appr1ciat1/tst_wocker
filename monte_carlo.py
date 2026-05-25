@@ -15,7 +15,6 @@ Monte Carlo 壓力測試 v3 — Equity-Curve Bootstrap
   python monte_carlo.py --legacy             # 舊版單筆 bootstrap (保留做比較)
 """
 
-import subprocess
 import re
 import sys
 import argparse
@@ -30,30 +29,31 @@ import pandas as pd
 import numpy as np
 
 
-def get_equity_curve():
-    """從最新 equity CSV 取得每日組合權益曲線。"""
-    csv_files = glob.glob('artifacts/equity_*.csv')
-    if not csv_files:
-        print("📥 執行回測以取得權益曲線...")
-        subprocess.run('python3 ai_report.py', shell=True,
-                       capture_output=True, text=True, timeout=300)
-        csv_files = glob.glob('artifacts/equity_*.csv')
-        if not csv_files:
-            print("❌ 無法取得權益曲線")
-            sys.exit(1)
+def get_equity_curve(equity_path):
+    """從指定 equity CSV 取得每日組合權益曲線。"""
+    if not equity_path:
+        raise ValueError("請用 --equity 明確指定 artifacts/equity_*.csv")
+    if not os.path.exists(equity_path):
+        raise FileNotFoundError(f"找不到 equity CSV: {equity_path}")
 
-    latest = max(csv_files, key=os.path.getmtime)
-    print(f"   讀取 {latest}...")
-    df = pd.read_csv(latest, index_col=0, parse_dates=True)
+    print(f"   讀取 {equity_path}...")
+    df = pd.read_csv(equity_path, index_col=0, parse_dates=True)
+    if 'Equity' not in df.columns:
+        raise ValueError(f"{equity_path} 缺少 Equity 欄位")
     return df['Equity']
 
 
-def get_trades():
+def get_trades(trades_path=None):
     """從最新 trades CSV 取得交易列表（legacy 模式用）。"""
-    csv_files = glob.glob('artifacts/trades_*.csv')
-    if not csv_files:
-        return []
-    latest = max(csv_files, key=os.path.getmtime)
+    if trades_path:
+        latest = trades_path
+    else:
+        csv_files = glob.glob('artifacts/trades_*.csv')
+        if not csv_files:
+            return []
+        latest = max(csv_files, key=os.path.getmtime)
+    if not os.path.exists(latest):
+        raise FileNotFoundError(f"找不到 trades CSV: {latest}")
     trades = []
     with open(latest) as f:
         reader = csv.DictReader(f)
@@ -200,10 +200,14 @@ def main():
                         help='Block bootstrap 區塊大小-天 (預設 20 ≈ 1 個月)')
     parser.add_argument('--legacy', action='store_true',
                         help='也跑 legacy 單筆 bootstrap 做對比')
+    parser.add_argument('--equity', type=str, required=True,
+                        help='明確指定 equity CSV，例如 artifacts/equity_20260525.csv')
+    parser.add_argument('--trades', type=str, default=None,
+                        help='legacy 模式使用的 trades CSV；未提供則讀取最新 trades CSV')
     args = parser.parse_args()
 
     # === Equity-Curve Bootstrap ===
-    equity = get_equity_curve()
+    equity = get_equity_curve(args.equity)
     daily_returns = equity.pct_change().dropna()
     n_days = len(daily_returns)
 
@@ -217,6 +221,7 @@ def main():
     print(f"📊 Monte Carlo 壓力測試 v3 — {datetime.now().strftime('%Y-%m-%d')}")
     print(f"{'='*70}")
     print(f"   方法：Equity-Curve Block Bootstrap")
+    print(f"   輸入：{args.equity}")
     print(f"   資料：{n_days} 個交易日的每日組合報酬率")
     print(f"   區塊大小：{args.block_size} 天 (保留時序自相關)")
     print(f"   模擬次數：{args.runs}")
@@ -288,7 +293,7 @@ def main():
         print(f"\n{'='*70}")
         print(f"⚠️  Legacy 模式比較（單筆交易 bootstrap — 有方法論缺陷）")
         print(f"{'='*70}")
-        trades = get_trades()
+        trades = get_trades(args.trades)
         if trades:
             returns = [t['return'] for t in trades]
             print(f"   交易筆數: {len(returns)}")

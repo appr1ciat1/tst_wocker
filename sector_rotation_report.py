@@ -21,6 +21,7 @@ from datetime import datetime
 from strategy.ai_strategy import fetch_panel_data, build_liquid_universe
 from strategy.us_market import fetch_us_signals, align_us_to_tw
 from strategy.sector_rotation_backtest import SectorRotationBacktester
+from strategy.evaluation import slice_evaluation_window
 from strategy.risk_metrics import compute_risk_metrics, format_metrics_summary
 from strategy.benchmark import fetch_benchmark
 
@@ -64,6 +65,8 @@ def parse_args():
                         help='起始日期 (YYYY-MM-DD)')
     parser.add_argument('--end-date', type=str, default=None,
                         help='結束日期 (YYYY-MM-DD)')
+    parser.add_argument('--eval-start', type=str, default=None,
+                        help='績效評估起始日期 (YYYY-MM-DD)，可晚於資料暖機起始日')
     parser.add_argument('--top-sectors', type=int, default=3,
                         help='選取幾個板塊 (預設 3)')
     parser.add_argument('--stocks-per-sector', type=int, default=3,
@@ -132,15 +135,24 @@ def main():
         us_aligned, universe_mask,
     )
 
+    report_equity_df, report_trades_df = slice_evaluation_window(
+        equity_df, trades_df,
+        eval_start=args.eval_start,
+        initial_capital=args.capital,
+    )
+    if args.eval_start:
+        print(f"\n📏 績效統計區間: {args.eval_start} → {args.end_date or '今天'} "
+              f"(資料自 {args.start_date or f'近 {args.days} 天'} 暖機)")
+
     # Phase 5: 風險指標
-    if not trades_df.empty and not equity_df.empty:
-        metrics = compute_risk_metrics(equity_df, trades_df, args.capital)
+    if not report_equity_df.empty:
+        metrics = compute_risk_metrics(report_equity_df, report_trades_df, args.capital)
         print(format_metrics_summary(metrics))
 
         # 板塊分布統計
-        if 'Sector' in trades_df.columns:
+        if 'Sector' in report_trades_df.columns:
             print("\n📊 交易板塊分布:")
-            sector_stats = trades_df.groupby('Sector').agg(
+            sector_stats = report_trades_df.groupby('Sector').agg(
                 trades=('Return_Pct', 'count'),
                 avg_ret=('Return_Pct', 'mean'),
                 win_rate=('Return_Pct', lambda x: (x > 0).mean()),
@@ -152,22 +164,26 @@ def main():
                       f"勝率 {row['win_rate']*100:>4.0f}%")
 
         # 出場原因分布
-        if 'Reason' in trades_df.columns:
+        if 'Reason' in report_trades_df.columns:
             print("\n📊 出場原因:")
-            for reason, count in trades_df['Reason'].value_counts().items():
-                pct = count / len(trades_df) * 100
-                avg_ret = trades_df[trades_df['Reason'] == reason]['Return_Pct'].mean()
+            for reason, count in report_trades_df['Reason'].value_counts().items():
+                pct = count / len(report_trades_df) * 100
+                avg_ret = report_trades_df[report_trades_df['Reason'] == reason]['Return_Pct'].mean()
                 print(f"   {reason}: {count} 筆 ({pct:.0f}%) | "
                       f"均報酬 {avg_ret*100:+.1f}%")
 
     else:
-        print("❌ 沒有產生任何交易")
+        print("❌ 沒有可評估的 equity 資料")
         return
 
     # Phase 6: Benchmark 比較
     if args.compare:
         print("\n📊 Benchmark 比較:")
-        benchmark_equity = fetch_benchmark('0050', days=args.days)
+        benchmark_start = args.eval_start or args.start_date
+        benchmark_equity = fetch_benchmark(
+            '0050', days=args.days,
+            start_date=benchmark_start, end_date=args.end_date,
+        )
         if benchmark_equity is not None and not benchmark_equity.empty:
             bm_ret = (benchmark_equity.iloc[-1] / benchmark_equity.iloc[0] - 1) * 100
             bm_daily = benchmark_equity.pct_change().dropna()
@@ -175,22 +191,22 @@ def main():
             bm_peak = benchmark_equity.cummax()
             bm_mdd = ((benchmark_equity - bm_peak) / bm_peak).min() * 100
 
-            strat_ret = (equity_df['Equity'].iloc[-1] / equity_df['Equity'].iloc[0] - 1) * 100
+            strat_ret = (report_equity_df['Equity'].iloc[-1] / args.capital - 1) * 100
 
             print(f"   {'':20s} | {'策略':>10s} | {'0050':>10s}")
             print(f"   {'─'*50}")
             print(f"   {'總報酬':20s} | {strat_ret:>+9.1f}% | {bm_ret:>+9.1f}%")
             print(f"   {'Sharpe':20s} | {metrics.get('sharpe', 0):>10.2f} | {bm_sharpe:>10.2f}")
-            print(f"   {'MDD':20s} | {metrics.get('max_drawdown', 0)*100:>9.1f}% | {bm_mdd:>9.1f}%")
+            print(f"   {'MDD':20s} | {metrics.get('max_drawdown_pct', 0)*100:>9.1f}% | {bm_mdd:>9.1f}%")
 
     # 存 equity CSV
-    if not equity_df.empty:
+    if not report_equity_df.empty:
         import os
         os.makedirs('artifacts', exist_ok=True)
         today = datetime.now().strftime('%Y%m%d')
-        equity_df.to_csv(f'artifacts/sr_equity_{today}.csv')
-        if not trades_df.empty:
-            trades_df.to_csv(f'artifacts/sr_trades_{today}.csv', index=False)
+        report_equity_df.to_csv(f'artifacts/sr_equity_{today}.csv')
+        if not report_trades_df.empty:
+            report_trades_df.to_csv(f'artifacts/sr_trades_{today}.csv', index=False)
         print(f"\n💾 已儲存 artifacts/sr_equity_{today}.csv")
 
     print("\n🚀 板塊輪動回測完成！")

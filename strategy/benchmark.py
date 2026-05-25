@@ -16,7 +16,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-def fetch_benchmark(ticker='0050', days=800):
+def fetch_benchmark(ticker='0050', days=800, start_date=None, end_date=None):
     """
     下載 Benchmark 的每日收盤價。
 
@@ -25,19 +25,30 @@ def fetch_benchmark(ticker='0050', days=800):
     ticker : str
         Benchmark 代號（預設 0050 = 台灣 50 ETF）
     days : int
-        回溯天數
+        回溯天數。若提供 start_date，則忽略此參數。
+    start_date, end_date : str or datetime, optional
+        明確指定 benchmark 區間。
 
     Returns
     -------
     benchmark_equity : pd.Series
         以 1.0 為起始的 buy-and-hold 淨值曲線
     """
-    print(f"📈 下載 Benchmark: {ticker}.TW ({days} 天)...")
+    if end_date is not None:
+        end_dt = pd.Timestamp(end_date)
+    else:
+        end_dt = pd.Timestamp(datetime.today())
 
-    end_date = datetime.today()
-    start_date = end_date - timedelta(days=days)
+    if start_date is not None:
+        start_dt = pd.Timestamp(start_date)
+        range_label = f"{start_dt.strftime('%Y-%m-%d')} → {end_dt.strftime('%Y-%m-%d')}"
+    else:
+        start_dt = end_dt - timedelta(days=days)
+        range_label = f"{days} 天"
 
-    df = yf.download(f"{ticker}.TW", start=start_date, end=end_date, progress=False)
+    print(f"📈 下載 Benchmark: {ticker}.TW ({range_label})...")
+
+    df = yf.download(f"{ticker}.TW", start=start_dt, end=end_dt, progress=False)
 
     if df.empty:
         print(f"   ⚠️ 無法下載 {ticker} 資料")

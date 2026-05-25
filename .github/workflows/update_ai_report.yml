@@ -89,7 +89,7 @@ jobs:
           git config --global user.email "voidful.stack@gmail.com"
           git config --global user.name "Voidful"
 
-          git add -A
+          git add stock_report.html paper_trading.html paper_equity.json || true
           git commit -m "📊 AI Report v8.5 + Paper Trading ($(date -u '+%Y-%m-%d'))" || echo "No changes"
 
           # Rebase onto latest remote to prevent non-fast-forward rejection
@@ -138,7 +138,9 @@ jobs:
 
       - name: Monte Carlo Stress Test (Block Bootstrap)
         if: steps.check.outputs.run == 'true'
-        run: python monte_carlo.py --runs 2000 --block-size 5
+        run: |
+          LATEST_EQUITY=$(ls -t artifacts/equity_*.csv | head -1)
+          python monte_carlo.py --equity "$LATEST_EQUITY" --runs 2000 --block-size 5
 
       - name: Upload quarterly report
         if: steps.check.outputs.run == 'true'
@@ -146,7 +148,7 @@ jobs:
           git config --global user.email "voidful.stack@gmail.com"
           git config --global user.name "Voidful"
 
-          git add -A
+          git add factor_search_results.csv ablation_results.csv backtest_chart.png || true
           git commit -m "🔄 Quarterly health check ($(date -u '+%Y-%m-%d'))" || echo "No changes"
 
           # Rebase onto latest remote to prevent non-fast-forward rejection

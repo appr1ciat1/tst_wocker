@@ -24,20 +24,34 @@ def run_backtest(args_str):
     cmd = f'python ai_report.py {args_str}'
     r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=180)
     out = r.stdout + r.stderr
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"Backtest command failed with exit code {r.returncode}: {cmd}\n"
+            f"{out[-2000:]}"
+        )
 
-    def get(pattern, default=0):
+    def get(pattern, label):
         m = re.search(pattern, out)
-        return float(m.group(1)) if m else default
+        if not m:
+            raise ValueError(f"Failed to parse {label} from backtest output")
+        return float(m.group(1))
+
+    def get_first(patterns, label):
+        for pattern in patterns:
+            m = re.search(pattern, out)
+            if m:
+                return float(m.group(1))
+        raise ValueError(f"Failed to parse {label} from backtest output")
 
     return {
-        'ann': get(r'年化報酬率:\s+([\+\-\d\.]+)%'),
-        'sharpe': get(r'Sharpe Ratio:\s+([\+\-\d\.]+)'),
-        'sortino': get(r'Sortino Ratio:\s+([\+\-\d\.]+)'),
-        'calmar': get(r'Calmar Ratio:\s+([\+\-\d\.]+)'),
-        'mdd': get(r'最大回撤:\s+([\+\-\d\.]+)%'),
-        'trades': int(get(r'共 (\d+) 筆交易')),
-        'win_rate': get(r'勝率\s*([\d\.]+)%'),
-        'pf': get(r'Profit Factor:\s+([\d\.]+)'),
+        'ann': get(r'年化報酬率:\s+([\+\-\d\.]+)%', 'annual return'),
+        'sharpe': get(r'Sharpe Ratio:\s+([\+\-\d\.]+)', 'Sharpe'),
+        'sortino': get(r'Sortino Ratio:\s+([\+\-\d\.]+)', 'Sortino'),
+        'calmar': get(r'Calmar Ratio:\s+([\+\-\d\.]+)', 'Calmar'),
+        'mdd': get(r'最大回撤:\s+([\+\-\d\.]+)%', 'max drawdown'),
+        'trades': int(get_first([r'總交易數:\s+(\d+)', r'共 (\d+) 筆交易'], 'trade count')),
+        'win_rate': get_first([r'勝率[:：]\s*([\d\.]+)%', r'勝率\s*([\d\.]+)%'], 'win rate'),
+        'pf': get(r'Profit Factor:\s+(inf|[\d\.]+)', 'profit factor'),
     }
 
 
@@ -218,4 +232,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

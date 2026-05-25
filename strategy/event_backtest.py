@@ -322,6 +322,25 @@ class EventDrivenBacktester:
         max_positions = int(1.0 / self.position_size)  # 最多同時持有
         ticker_history = {}  # ticker -> list of recent Return_Pct (for blacklist)
 
+        def is_tradable_bar(ticker, idx):
+            """True only when the raw OHLCV bar can support a real fill."""
+            required = (open_df, high_df, low_df, close_df)
+            if any(ticker not in df.columns for df in required):
+                return False
+            vals = [
+                open_df[ticker].iloc[idx],
+                high_df[ticker].iloc[idx],
+                low_df[ticker].iloc[idx],
+                close_df[ticker].iloc[idx],
+            ]
+            if any(pd.isna(v) or v <= 0 for v in vals):
+                return False
+            if vol_df is not None and ticker in vol_df.columns:
+                volume = vol_df[ticker].iloc[idx]
+                if pd.isna(volume) or volume <= 0:
+                    return False
+            return True
+
         # === 動態風險預算：預計算市場 realized vol ===
         market_daily_ret = None
         if self.dynamic_risk and market_close is not None:
@@ -357,6 +376,8 @@ class EventDrivenBacktester:
             exited_tickers = []
             for ticker, trade in active_trades.items():
                 trade['days_held'] += 1
+                if not is_tradable_bar(ticker, i):
+                    continue
 
                 current_high = high_df[ticker].iloc[i]
                 current_low = low_df[ticker].iloc[i]
@@ -637,6 +658,8 @@ class EventDrivenBacktester:
                         prev_close = close_df[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
                         entry_price = open_df[ticker].iloc[i]
 
+                        if not is_tradable_bar(ticker, i):
+                            continue
                         if pd.isna(entry_price) or pd.isna(score) or pd.isna(ma):
                             continue
                         if pd.isna(prev_close) or entry_price <= 0:
@@ -677,6 +700,8 @@ class EventDrivenBacktester:
                             continue
                         entry_price = open_df[ticker].iloc[i]
                         prev_close = close_df[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
+                        if not is_tradable_bar(ticker, i):
+                            continue
                         if pd.isna(entry_price) or pd.isna(prev_close) or entry_price <= 0:
                             continue
 
@@ -696,7 +721,8 @@ class EventDrivenBacktester:
                 # === 台指期對沖：大盤 < 60MA 時開空單 ===
                 if self.futures_hedge and market_ma60 is not None:
                     try:
-                        mkt_date = market_close.index.get_indexer([date], method='ffill')[0]
+                        prev_date = dates[i - 1]
+                        mkt_date = market_close.index.get_indexer([prev_date], method='ffill')[0]
                         if mkt_date >= 0:
                             mkt_val = market_close.iloc[mkt_date]
                             mkt_ma = market_ma60.iloc[mkt_date]
@@ -934,7 +960,8 @@ class EventDrivenBacktester:
                         rank_weight = raw_weights[rank_idx] / total_w * len(selected)
 
                     # === 動態風險預算：根據近期 realized vol 調整 position size ===
-                    # Batch entry: 分批建倉，Day1 只進部分倉位
+                    # Batch entry is intentionally disabled at the CLI until
+                    # pending-order execution is modeled end to end.
                     batch_scale = 1.0
                     if self.batch_entry > 1:
                         # 剩餘批次由後續幾天的 pending_batches 自動追蹤
@@ -944,7 +971,8 @@ class EventDrivenBacktester:
                     effective_pos_size = self.position_size * rank_weight * regime_scale * gap_scale * batch_scale
                     if self.dynamic_risk and market_daily_ret is not None:
                         try:
-                            mkt_idx = market_close.index.get_indexer([date], method='ffill')[0]
+                            prev_date = dates[i - 1]
+                            mkt_idx = market_close.index.get_indexer([prev_date], method='ffill')[0]
                             if mkt_idx >= 20:
                                 recent_vol = market_daily_ret.iloc[mkt_idx-20:mkt_idx].std()
                                 target_vol = 0.01  # 目標日波動 1%

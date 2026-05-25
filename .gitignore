@@ -170,3 +170,12 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# Generated strategy reports and paper-trading state
+artifacts/*.csv
+artifacts/*.json
+artifacts/*.html
+stock_report.html
+paper_trading.html
+paper_equity.json
+paper_signals.json
+paper_trades.json

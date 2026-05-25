@@ -27,27 +27,43 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 
-def run_backtest_range(start_date, end_date, extra_args=''):
+def run_backtest_range(start_date, end_date, eval_start=None, extra_args=''):
     """Run ai_report.py with explicit date range and extract metrics."""
     cmd = (f'python3 ai_report.py '
            f'--start-date {start_date} --end-date {end_date} '
            f'{extra_args}')
+    if eval_start:
+        cmd += f' --eval-start {eval_start}'
     r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
     out = r.stdout + r.stderr
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"Backtest command failed with exit code {r.returncode}: {cmd}\n"
+            f"{out[-2000:]}"
+        )
 
-    def get(pattern, default=0):
+    def get(pattern, label):
         m = re.search(pattern, out)
-        return float(m.group(1)) if m else default
+        if not m:
+            raise ValueError(f"Failed to parse {label} from backtest output")
+        return float(m.group(1))
+
+    def get_first(patterns, label):
+        for pattern in patterns:
+            m = re.search(pattern, out)
+            if m:
+                return float(m.group(1))
+        raise ValueError(f"Failed to parse {label} from backtest output")
 
     return {
-        'ann': get(r'年化報酬率:\s+([\+\-\d\.]+)%'),
-        'sharpe': get(r'Sharpe Ratio:\s+([\+\-\d\.]+)'),
-        'sortino': get(r'Sortino Ratio:\s+([\+\-\d\.]+)'),
-        'calmar': get(r'Calmar Ratio:\s+([\+\-\d\.]+)'),
-        'mdd': get(r'最大回撤:\s+([\+\-\d\.]+)%'),
-        'trades': int(get(r'共 (\d+) 筆交易')),
-        'win_rate': get(r'勝率\s*([\d\.]+)%'),
-        'pf': get(r'Profit Factor:\s+([\d\.]+)'),
+        'ann': get(r'年化報酬率:\s+([\+\-\d\.]+)%', 'annual return'),
+        'sharpe': get(r'Sharpe Ratio:\s+([\+\-\d\.]+)', 'Sharpe'),
+        'sortino': get(r'Sortino Ratio:\s+([\+\-\d\.]+)', 'Sortino'),
+        'calmar': get(r'Calmar Ratio:\s+([\+\-\d\.]+)', 'Calmar'),
+        'mdd': get(r'最大回撤:\s+([\+\-\d\.]+)%', 'max drawdown'),
+        'trades': int(get_first([r'總交易數:\s+(\d+)', r'共 (\d+) 筆交易'], 'trade count')),
+        'win_rate': get_first([r'勝率[:：]\s*([\d\.]+)%', r'勝率\s*([\d\.]+)%'], 'win rate'),
+        'pf': get(r'Profit Factor:\s+(inf|[\d\.]+)', 'profit factor'),
     }
 
 
@@ -136,7 +152,7 @@ def main():
     print(f"📊 Anchored Walk-Forward OOS 驗證 v2 — {datetime.now().strftime('%Y-%m-%d')}")
     print(f"   總區間: {total_start} → {total_end}")
     print(f"   段數: {args.folds} (非重疊 OOS)")
-    print(f"   每段含 120 天暖機期 (MA60 + buffer)")
+    print(f"   每段含 120 天暖機期 (MA60 + buffer)，績效只統計 OOS eval window")
     print()
     print("   ⚠️  注意：這是固定參數的 OOS 穩定性測試，")
     print("        不是 nested walk-forward (train→test with param selection)。")
@@ -163,9 +179,11 @@ def main():
         sys.stderr.flush()
 
         try:
-            # Use fetch_start for data (includes warmup), but the eval
-            # period is eval_start → eval_end
-            metrics = run_backtest_range(w['fetch_start'], w['eval_end'])
+            # Use fetch_start for warmup data, but report metrics only over
+            # eval_start → eval_end.
+            metrics = run_backtest_range(
+                w['fetch_start'], w['eval_end'], eval_start=w['eval_start']
+            )
 
             sharpes.append(metrics['sharpe'])
             annuals.append(metrics['ann'])

@@ -22,8 +22,10 @@ v2 改進：
 """
 
 import argparse
+import json
 import os
 import sys
+import subprocess
 from datetime import datetime, timedelta
 
 import matplotlib
@@ -38,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from strategy.ai_strategy import fetch_panel_data, engineer_features, build_liquid_universe
 from strategy.event_backtest import EventDrivenBacktester
+from strategy.evaluation import slice_evaluation_window
 from strategy.risk_metrics import compute_risk_metrics, format_metrics_summary
 from strategy.benchmark import fetch_benchmark, equal_weight_benchmark, compute_excess_return
 from strategy.institutional_flow import build_inst_flow_df, get_inst_flow_for_signals, fetch_inst_rankings
@@ -391,7 +394,10 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     inst_section_html = _build_inst_section()
 
     # 顯示 Top-K 建議買進
+    orders = []
     for rank, (ticker, score, price) in enumerate(selected, 1):
+        order_valid = True
+        time_exit = get_next_n_trading_days(latest_date, max_hold_days)
         # 使用精確 ATR（與回測引擎同公式）
         if tp_sl_mode == 'atr':
             high_s = high_df[ticker] if (high_df is not None and ticker in high_df.columns) else None
@@ -409,8 +415,8 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
                 # 合理性檢查
                 if tp_pct_display > 50 or sl_pct_display > 50:
                     plan = '<span style="color:#ff4444">⚠️ ATR 異常，信號無效</span>'
+                    order_valid = False
                 else:
-                    time_exit = get_next_n_trading_days(latest_date, max_hold_days)
                     plan = (f'<b>停利:</b> <span style="color:#00ff00">{tp_price:.1f}</span>'
                             f' (+{tp_pct_display:.1f}%) '
                             f'<br><b>停損:</b> <span style="color:#ff4444">{sl_price:.1f}</span>'
@@ -419,7 +425,6 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
             else:
                 tp_price = price * (1 + tp_pct)
                 sl_price = price * (1 - sl_pct)
-                time_exit = get_next_n_trading_days(latest_date, max_hold_days)
                 plan = (f'<b>停利:</b> <span style="color:#00ff00">{tp_price:.1f}</span>'
                         f' (+{tp_pct*100:.1f}%) '
                         f'<br><b>停損:</b> <span style="color:#ff4444">{sl_price:.1f}</span>'
@@ -428,7 +433,6 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         else:
             tp_price = price * (1 + tp_pct)
             sl_price = price * (1 - sl_pct)
-            time_exit = get_next_n_trading_days(latest_date, max_hold_days)
             plan = (f'<b>停利:</b> <span style="color:#00ff00">{tp_price:.1f}</span>'
                     f' (+{tp_pct*100:.1f}%) '
                     f'<br><b>停損:</b> <span style="color:#ff4444">{sl_price:.1f}</span>'
@@ -470,6 +474,23 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
             f'<td>{price:.1f}</td><td>{status}</td><td>{plan}</td>'
             f'<td>{hist_badge}</td>{inst_badge}</tr>\n'
         )
+        if order_valid:
+            orders.append({
+                'signal_date': latest_date.strftime('%Y-%m-%d'),
+                'execution_date': get_next_n_trading_days(latest_date, 1),
+                'ticker': ticker,
+                'side': 'buy',
+                'rank': rank,
+                'score': round(float(score), 4),
+                'model_entry_ref': 'next_open',
+                'reference_close': round(float(price), 4),
+                'limit_price': round(float(price), 4),
+                'tp_price': round(float(tp_price), 4),
+                'sl_price': round(float(sl_price), 4),
+                'max_hold_days': int(max_hold_days),
+                'time_exit': time_exit,
+                'model_version': 'v8.5',
+            })
 
     # 顯示未被選入的候選（排名 > Top-K）
     for ticker, score, price in not_selected[:5]:
@@ -1272,6 +1293,41 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     today_signals = today_signals.dropna().sort_values('Score', ascending=False)
     today_signals.to_csv(f'artifacts/signals_{date_str}.csv')
 
+    with open(f'artifacts/orders_{date_str}.json', 'w', encoding='utf-8') as f:
+        json.dump({'orders': orders}, f, indent=2, ensure_ascii=False)
+
+    try:
+        git_sha = subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'], text=True
+        ).strip()
+    except Exception:
+        git_sha = None
+    metadata = {
+        'created_at': datetime.now().isoformat(),
+        'strategy_version': 'v8.5',
+        'git_sha': git_sha,
+        'report_date': latest_date.strftime('%Y-%m-%d'),
+        'config': config,
+        'metrics': {
+            'total_return': metrics.get('total_return'),
+            'ann_return': metrics.get('ann_return'),
+            'sharpe': metrics.get('sharpe'),
+            'geometric_sharpe': metrics.get('geometric_sharpe'),
+            'sortino': metrics.get('sortino'),
+            'calmar': metrics.get('calmar'),
+            'max_drawdown_pct': metrics.get('max_drawdown_pct'),
+            'total_trades': metrics.get('total_trades'),
+        },
+        'artifacts': {
+            'equity': f'artifacts/equity_{date_str}.csv',
+            'trades': f'artifacts/trades_{date_str}.csv' if not trades_df.empty else None,
+            'signals': f'artifacts/signals_{date_str}.csv',
+            'orders': f'artifacts/orders_{date_str}.json',
+        },
+    }
+    with open(f'artifacts/metadata_{date_str}.json', 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False, default=str)
+
     print(f"   ✅ 報表已生成：stock_report.html")
     print(f"   📁 Artifacts 已存入 artifacts/ 目錄")
 
@@ -1392,7 +1448,7 @@ def parse_args():
     # 資金
     parser.add_argument(
         '--capital', type=float, default=200_000,
-        help='初始模擬資金 (預設: 1000000)'
+        help='初始模擬資金 (預設: 200000)'
     )
     parser.add_argument(
         '--position-size', type=float, default=0.10,
@@ -1421,6 +1477,10 @@ def parse_args():
     parser.add_argument(
         '--end-date', type=str, default=None,
         help='明確指定回測結束日期 (YYYY-MM-DD，預設為今天)'
+    )
+    parser.add_argument(
+        '--eval-start', type=str, default=None,
+        help='績效評估起始日期 (YYYY-MM-DD)。資料仍可從 --start-date 提早抓取作暖機'
     )
 
     # 結構性功能
@@ -1456,7 +1516,7 @@ def parse_args():
     )
     parser.add_argument(
         '--sector-max-pct', type=float, default=0.75,
-        help='單一板塊最大持倉比例 (預設 1.0 = 停用; 建議 0.5 = 50%% 可壓低 MDD)'
+        help='單一板塊最大持倉比例 (預設 0.75 = 75%%; 1.0 = 停用)'
     )
     parser.add_argument(
         '--corr-filter', type=float, default=0.8,
@@ -1552,8 +1612,8 @@ def parse_args():
         help='啟用宏觀 Regime 疊加：VIX > 22/25/30 時降低曝險'
     )
     parser.add_argument(
-        '--batch-entry', type=int, default=1,
-        help='分批建倉天數（1=單筆, 2=兩批, 3=三批）'
+        '--batch-entry', type=int, default=1, choices=[1],
+        help='分批建倉天數（目前僅支援 1=單筆；多批需 pending order state machine）'
     )
     parser.add_argument(
         '--dynamic-topk', action='store_true',
@@ -1656,7 +1716,10 @@ def main():
     market_close = None
     if args.regime_filter or args.residual_momentum:
         print("\n📊 下載大盤指數 (0050) 用於 regime filter...")
-        bench_raw = fetch_benchmark('0050', days=args.days)
+        bench_raw = fetch_benchmark(
+            '0050', days=args.days,
+            start_date=args.start_date, end_date=args.end_date,
+        )
         if len(bench_raw) > 0:
             market_close = bench_raw * bench_raw.iloc[0]
 
@@ -1740,15 +1803,35 @@ def main():
         universe_mask=universe_mask,
     )
 
+    report_equity_df, report_trades_df = slice_evaluation_window(
+        equity_df, trades_df,
+        eval_start=args.eval_start,
+        initial_capital=args.capital,
+    )
+    if args.eval_start:
+        print(f"\n📏 績效統計區間: {args.eval_start} → {args.end_date or '今天'} "
+              f"(資料自 {args.start_date or f'近 {args.days} 天'} 暖機)")
+
     # Phase 5: 風險指標
-    metrics = compute_risk_metrics(equity_df, trades_df, args.capital)
+    metrics = compute_risk_metrics(report_equity_df, report_trades_df, args.capital)
     print(format_metrics_summary(metrics))
 
     # Phase 6: Benchmark
     print("\n📊 載入 Benchmark 進行比較...")
-    benchmark_equity = fetch_benchmark('0050', days=args.days)
-    benchmark2_equity = fetch_benchmark('00981A', days=args.days)
+    benchmark_start = args.eval_start or args.start_date
+    benchmark_equity = fetch_benchmark(
+        '0050', days=args.days,
+        start_date=benchmark_start, end_date=args.end_date,
+    )
+    benchmark2_equity = fetch_benchmark(
+        '00981A', days=args.days,
+        start_date=benchmark_start, end_date=args.end_date,
+    )
     ew_equity = equal_weight_benchmark(close_df)
+    if benchmark_start:
+        ew_equity = ew_equity.loc[pd.to_datetime(ew_equity.index) >= pd.Timestamp(benchmark_start)]
+        if not ew_equity.empty:
+            ew_equity = ew_equity / ew_equity.iloc[0]
 
     # Phase 7: 報表產出
     config = {
@@ -1766,7 +1849,7 @@ def main():
         'buy_cost': args.buy_cost,
         'sell_cost': args.sell_cost,
     }
-    generate_report(trades_df, equity_df, total_score, close_df, config,
+    generate_report(report_trades_df, report_equity_df, total_score, close_df, config,
                     metrics, benchmark_equity, ew_equity,
                     benchmark2_equity=benchmark2_equity,
                     high_df=high_df, low_df=low_df,

@@ -14,11 +14,13 @@ Paper Trading 自動追蹤器 v8.5
 """
 
 import json
+import glob
 import os
 import re
 import sys
 from datetime import datetime, date, timedelta
 import argparse
+import pandas as pd
 
 DATA_FILE = 'paper_equity.json'
 HTML_FILE = 'paper_trading.html'
@@ -41,31 +43,100 @@ def save_data(data):
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f, indent=2, ensure_ascii=False, default=str)
 
-def get_current_prices(tickers):
-    """用 yfinance 取得最新收盤價。"""
+def get_current_bars(tickers):
+    """用 yfinance 取得最新 OHLC，用於 paper fills 與 mark-to-market。"""
     import yfinance as yf
-    prices = {}
+    bars = {}
     if not tickers:
-        return prices
-    symbols = [f"{t}.TW" for t in tickers]
+        return bars
+
+    def download(symbols):
+        try:
+            return yf.download(symbols, period='5d', progress=False)
+        except Exception:
+            return None
+
     try:
-        df = yf.download(symbols, period='2d', progress=False)
-        close = df['Close'] if 'Close' in df.columns else df[('Close',)]
-        if isinstance(close, (int, float)):
-            # single ticker
-            prices[tickers[0]] = float(close)
-        else:
-            for t, sym in zip(tickers, symbols):
-                if sym in close.columns:
-                    val = close[sym].dropna()
-                    if len(val) > 0:
-                        prices[t] = float(val.iloc[-1])
+        def read_bars(df, symbol_map):
+            if df is None or df.empty:
+                return {}
+            parsed = {}
+            for ticker, symbol in symbol_map.items():
+                bar = {
+                    'open': field_value(df, 'Open', symbol),
+                    'high': field_value(df, 'High', symbol),
+                    'low': field_value(df, 'Low', symbol),
+                    'close': field_value(df, 'Close', symbol),
+                }
+                if bar['close'] is not None:
+                    parsed[ticker] = bar
+            return parsed
+
+        def field_value(df, field, symbol):
+            if isinstance(df.columns, pd.MultiIndex):
+                if (field, symbol) not in df.columns:
+                    return None
+                series = df[(field, symbol)].dropna()
+            elif field in df.columns:
+                series = df[field].dropna()
+            else:
+                return None
+            if len(series) == 0:
+                return None
+            return float(series.iloc[-1])
+
+        tw_symbols = {t: f"{t}.TW" for t in tickers}
+        bars.update(read_bars(download(list(tw_symbols.values())), tw_symbols))
+        missing = [t for t in tickers if t not in bars]
+        if missing:
+            two_symbols = {t: f"{t}.TWO" for t in missing}
+            bars.update(read_bars(download(list(two_symbols.values())), two_symbols))
     except Exception as e:
         print(f"   ⚠️ 價格下載失敗: {e}")
-    return prices
+    return bars
+
+
+def get_current_prices(tickers):
+    """Backward-compatible latest close lookup."""
+    return {ticker: bar['close'] for ticker, bar in get_current_bars(tickers).items()}
+
+
+def extract_signals_from_orders():
+    """從 artifacts/orders_YYYYMMDD.json 擷取今日機器可讀訂單。"""
+    order_files = glob.glob('artifacts/orders_*.json')
+    if not order_files:
+        return []
+    latest = max(order_files, key=os.path.getmtime)
+    try:
+        with open(latest, encoding='utf-8') as f:
+            payload = json.load(f)
+    except Exception as e:
+        print(f"   ⚠️ orders JSON 讀取失敗: {e}")
+        return []
+
+    signals = []
+    for order in payload.get('orders', []):
+        if order.get('side') != 'buy':
+            continue
+        signals.append({
+            'ticker': order['ticker'],
+            'entry': float(order.get('limit_price') or order.get('reference_close')),
+            'tp': float(order['tp_price']),
+            'sl': float(order['sl_price']),
+            'execution_date': order.get('execution_date'),
+            'max_hold_days': int(order.get('max_hold_days', 20)),
+            'time_exit': order.get('time_exit'),
+        })
+    if signals:
+        print(f"   📦 使用 orders JSON: {latest}")
+    return signals
 
 def extract_signals_from_report():
     """從 stock_report.html 擷取今日買入信號。"""
+    order_signals = extract_signals_from_orders()
+    if order_signals:
+        return order_signals
+
     report_path = 'stock_report.html'
     if not os.path.exists(report_path):
         return []
@@ -90,6 +161,7 @@ def extract_signals_from_report():
                 'entry': float(entry_m[2]),  # third number is entry price (1st=ticker, 2nd=score, 3rd=price)
                 'tp': float(tp_m.group(1)),
                 'sl': float(sl_m.group(1)),
+                'max_hold_days': 20,
             })
     return signals
 
@@ -117,27 +189,32 @@ def update_tracker(data):
     signals = extract_signals_from_report()
     signal_tickers = [s['ticker'] for s in signals]
     all_tickers_set = set(all_tickers + signal_tickers)
-    prices = get_current_prices(list(all_tickers_set))
+    bars = get_current_bars(list(all_tickers_set))
+    prices = {ticker: bar['close'] for ticker, bar in bars.items()}
 
     # 2. 追蹤已持倉：檢查 TP/SL/時間到期
     to_close = []
     for ticker, pos in data['positions'].items():
         pos['day_count'] = pos.get('day_count', 0) + 1
-        price = prices.get(ticker)
-        if price is None:
+        bar = bars.get(ticker)
+        if bar is None or bar.get('close') is None:
             continue
 
         reason = None
-        exit_price = price
-        if price >= pos['tp']:
-            reason = 'TP'
-            exit_price = pos['tp']
-        elif price <= pos['sl']:
+        exit_price = bar['close']
+        pos_max_hold = pos.get('max_hold_days', max_hold)
+        # Conservative same-day ordering: SL before TP, matching backtest.
+        if bar.get('low') is not None and bar['low'] <= pos['sl']:
             reason = 'SL'
-            exit_price = pos['sl']
-        elif pos['day_count'] >= max_hold:
+            open_price = bar.get('open')
+            exit_price = open_price if open_price is not None and open_price < pos['sl'] else pos['sl']
+        elif bar.get('high') is not None and bar['high'] >= pos['tp']:
+            reason = 'TP'
+            open_price = bar.get('open')
+            exit_price = open_price if open_price is not None and open_price > pos['tp'] else pos['tp']
+        elif pos['day_count'] >= pos_max_hold:
             reason = 'TIME'
-            exit_price = price
+            exit_price = bar['close']
 
         if reason:
             # 計算 PnL
@@ -177,7 +254,19 @@ def update_tracker(data):
             ticker = sig['ticker']
             if ticker in data['positions']:
                 continue
-            entry_price = sig['entry']
+            execution_date = sig.get('execution_date')
+            if execution_date and execution_date > today:
+                continue
+            bar = bars.get(ticker)
+            if bar is None:
+                continue
+            limit_price = sig['entry']
+            open_price = bar.get('open')
+            low_price = bar.get('low')
+            if low_price is not None and low_price > limit_price:
+                print(f"   ⏭️ 未成交 {ticker}: low {low_price:.1f} > limit {limit_price:.1f}")
+                continue
+            entry_price = min(open_price, limit_price) if open_price is not None and open_price <= limit_price else limit_price
             trade_amount = data['capital'] * position_size
             buy_cost = trade_amount * (buy_cost_rate + slippage)
             if data['capital'] >= trade_amount + buy_cost:
@@ -190,6 +279,7 @@ def update_tracker(data):
                     'entry_date': today,
                     'shares': round(shares, 0),
                     'day_count': 0,
+                    'max_hold_days': sig.get('max_hold_days', max_hold),
                 }
                 opened += 1
                 print(f"   🆕 開倉 {ticker} @ {entry_price:.1f} (TP {sig['tp']:.1f} / SL {sig['sl']:.1f})")

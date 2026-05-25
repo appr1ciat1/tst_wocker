@@ -114,6 +114,25 @@ class SectorRotationBacktester:
         active_trades = {}
         max_positions = int(1.0 / self.position_size)
 
+        def is_tradable_bar(ticker, idx):
+            """True only when the raw OHLCV bar can support a real fill."""
+            required = (open_df, high_df, low_df, close_df)
+            if any(ticker not in df.columns for df in required):
+                return False
+            vals = [
+                open_df[ticker].iloc[idx],
+                high_df[ticker].iloc[idx],
+                low_df[ticker].iloc[idx],
+                close_df[ticker].iloc[idx],
+            ]
+            if any(pd.isna(v) or v <= 0 for v in vals):
+                return False
+            if vol_df is not None and ticker in vol_df.columns:
+                volume = vol_df[ticker].iloc[idx]
+                if pd.isna(volume) or volume <= 0:
+                    return False
+            return True
+
         # 統計
         regime_stats = {'full': 0, 'reduced': 0, 'minimal': 0, 'stopped': 0}
         tech_gate_stats = {'open': 0, 'half': 0, 'closed': 0}
@@ -126,6 +145,8 @@ class SectorRotationBacktester:
             exited_tickers = []
             for ticker, trade in active_trades.items():
                 trade['days_held'] += 1
+                if not is_tradable_bar(ticker, i):
+                    continue
                 current_high = high_df[ticker].iloc[i]
                 current_low = low_df[ticker].iloc[i]
                 current_close = close_df[ticker].iloc[i]
@@ -174,10 +195,13 @@ class SectorRotationBacktester:
                                     self.top_sectors).index.tolist()
                                 sector_still_strong = sector in top_sectors_now
 
-                        # 檢查股價是否 > MA20
-                        ma20_val = ma_20[ticker].iloc[i] if ticker in ma_20.columns else np.nan
+                        # 檢查股價是否 > MA20；用 t-1 避免收盤後訊號同日決策。
+                        ma20_val = ma_20[ticker].iloc[i - 1] if ticker in ma_20.columns else np.nan
+                        prev_close = close_df[ticker].iloc[i - 1] if ticker in close_df.columns else np.nan
                         stock_above_ma20 = (
-                            not pd.isna(ma20_val) and current_close > ma20_val
+                            not pd.isna(ma20_val)
+                            and not pd.isna(prev_close)
+                            and prev_close > ma20_val
                         )
 
                         if sector_still_strong and stock_above_ma20:
@@ -325,8 +349,10 @@ class SectorRotationBacktester:
                     if universe_mask is not None:
                         if ticker not in universe_mask.columns:
                             continue
-                        if not universe_mask[ticker].iloc[i]:
+                        if not universe_mask[ticker].iloc[i - 1]:
                             continue
+                    if not is_tradable_bar(ticker, i):
+                        continue
 
                     close_val = close_df[ticker].iloc[i - 1]
                     if pd.isna(close_val) or close_val <= 0:

@@ -56,42 +56,77 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
           f"({start_dt.strftime('%Y-%m-%d')} → {end_dt.strftime('%Y-%m-%d')}, "
           f"~{actual_days} 天)...")
 
-    tw_tickers = [f"{t}.TW" for t in tickers]
+    def _extract_field(raw_df, field):
+        if raw_df.empty:
+            return pd.DataFrame()
+        if isinstance(raw_df.columns, pd.MultiIndex):
+            try:
+                extracted = raw_df.xs(field, level=0, axis=1)
+            except KeyError:
+                return pd.DataFrame(index=raw_df.index)
+        elif field in raw_df.columns:
+            extracted = raw_df[[field]]
+        else:
+            return pd.DataFrame(index=raw_df.index)
+        extracted = extracted.copy()
+        extracted.columns = [
+            str(c).replace('.TW', '').replace('.TWO', '')
+            for c in extracted.columns
+        ]
+        if extracted.columns.duplicated().any():
+            extracted = extracted.T.groupby(level=0).first().T
+        return extracted
+
+    def _download_symbols(symbols):
+        downloaded = []
+        batch_size = 50
+        for batch_start in range(0, len(symbols), batch_size):
+            batch = symbols[batch_start:batch_start + batch_size]
+            batch_num = batch_start // batch_size + 1
+            total_batches = (len(symbols) + batch_size - 1) // batch_size
+            print(f"   📦 下載批次 {batch_num}/{total_batches} ({len(batch)} 檔)...")
+            batch_df = yf.download(batch, start=start_dt, end=end_dt, progress=False)
+            if not batch_df.empty:
+                downloaded.append(batch_df)
+        return downloaded
 
     # yfinance 批次下載有大小限制，分批處理
-    batch_size = 50
-    all_dfs = []
-    for batch_start in range(0, len(tw_tickers), batch_size):
-        batch = tw_tickers[batch_start:batch_start + batch_size]
-        batch_num = batch_start // batch_size + 1
-        total_batches = (len(tw_tickers) + batch_size - 1) // batch_size
-        print(f"   📦 下載批次 {batch_num}/{total_batches} ({len(batch)} 檔)...")
-        df = yf.download(batch, start=start_dt, end=end_dt, progress=False)
-        if not df.empty:
-            all_dfs.append(df)
+    tw_tickers = [f"{t}.TW" for t in tickers]
+    all_dfs = _download_symbols(tw_tickers)
 
     if not all_dfs:
         raise RuntimeError("無法下載任何資料")
 
     # 合併所有批次
-    if len(all_dfs) == 1:
-        df = all_dfs[0]
-    else:
-        df = pd.concat(all_dfs, axis=1)
+    df = all_dfs[0] if len(all_dfs) == 1 else pd.concat(all_dfs, axis=1)
+
+    # 上櫃股票常用 .TWO 後綴；先抓 .TW，缺資料者再 fallback。
+    close_probe = _extract_field(df, 'Close')
+    missing_tickers = [
+        ticker for ticker in tickers
+        if ticker not in close_probe.columns or close_probe[ticker].dropna().empty
+    ]
+    if missing_tickers:
+        print(f"   🔁 .TW 無資料，改試 .TWO: {len(missing_tickers)} 檔")
+        two_dfs = _download_symbols([f"{t}.TWO" for t in missing_tickers])
+        if two_dfs:
+            df = pd.concat([df] + two_dfs, axis=1)
 
     data = {}
     for col in ['Close', 'Open', 'High', 'Low', 'Volume']:
-        if isinstance(df.columns, pd.MultiIndex):
-            try:
-                temp_df = df.xs(col, level=0, axis=1)
-            except KeyError:
-                print(f"   ⚠️ 欄位 {col} 不存在，跳過")
-                continue
-        else:
-            temp_df = df[[col]]
+        temp_df = _extract_field(df, col)
+        if temp_df.empty:
+            print(f"   ⚠️ 欄位 {col} 不存在，跳過")
+            continue
 
-        temp_df.columns = [str(c).replace('.TW', '') for c in temp_df.columns]
-        data[col] = temp_df.ffill()
+        # Keep tradable bars raw. Forward-filling Open/High/Low/Volume creates
+        # fake fills and fake liquidity on missing or suspended days. Close is
+        # only used as an indicator/marking input here, so allow a one-day carry
+        # to bridge isolated vendor gaps without creating long synthetic series.
+        if col == 'Close':
+            data[col] = temp_df.ffill(limit=1)
+        else:
+            data[col] = temp_df
 
     print(f"   ✅ 下載完成，資料範圍：{data['Close'].index[0].strftime('%Y-%m-%d')}"
           f" → {data['Close'].index[-1].strftime('%Y-%m-%d')}"
@@ -447,4 +482,3 @@ def _ml_factor_score(close_df, rank_mom, rank_trend, rank_vol, rank_stab,
 
     print(f"   ✅ ML 因子加權完成 (模型訓練 {(len(dates) - train_window) // retrain_interval} 次)")
     return total_score
-

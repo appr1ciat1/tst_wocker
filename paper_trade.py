@@ -36,6 +36,7 @@ import argparse
 
 TRADE_LOG = 'paper_trades.json'
 SIGNAL_LOG = 'paper_signals.json'
+EQUITY_LOG = 'paper_equity.json'
 
 
 def send_telegram(message):
@@ -68,6 +69,46 @@ def load_json(path):
 def save_json(path, data):
     with open(path, 'w') as f:
         json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+
+
+def fetch_latest_prices(tickers):
+    """Fetch latest close prices for mark-to-market checks."""
+    prices = {}
+    if not tickers:
+        return prices
+    try:
+        import yfinance as yf
+
+        def read_prices(symbol_map):
+            data = yf.download(list(symbol_map.values()), period='5d', progress=False)
+            parsed = {}
+            if data.empty:
+                return parsed
+            close = data['Close']
+            if len(symbol_map) == 1:
+                ticker = next(iter(symbol_map))
+                if hasattr(close, 'iloc') and getattr(close, 'ndim', 1) == 2:
+                    close = close.iloc[:, 0]
+                series = close.dropna()
+                if not series.empty:
+                    parsed[ticker] = float(series.iloc[-1])
+            else:
+                for ticker, yf_ticker in symbol_map.items():
+                    if yf_ticker in close.columns:
+                        series = close[yf_ticker].dropna()
+                        if not series.empty:
+                            parsed[ticker] = float(series.iloc[-1])
+            return parsed
+
+        tw_symbols = {t: f"{t}.TW" for t in tickers}
+        prices.update(read_prices(tw_symbols))
+        missing = [t for t in tickers if t not in prices]
+        if missing:
+            two_symbols = {t: f"{t}.TWO" for t in missing}
+            prices.update(read_prices(two_symbols))
+    except Exception as e:
+        print(f"   ⚠️ 最新價格下載失敗，未實現損益將用成本估算: {e}")
+    return prices
 
 
 def extract_signal_rows(html):
@@ -348,11 +389,10 @@ def check_portfolio_hardstop(args):
     soft_pct = args.soft_stop
     hard_pct = args.hard_stop
 
-    # 計算已投入成本 vs 當前市值
-    # 簡化模型：統計所有 buy 的成本，減掉所有 sell 的收入
     positions = {}  # {ticker: {'cost': float, 'shares': int}}
     total_invested = 0.0
     total_returned = 0.0
+    realized_pnl = 0.0
 
     for t in trades:
         ticker = t['ticker']
@@ -363,46 +403,82 @@ def check_portfolio_hardstop(args):
             positions[ticker]['shares'] += t['shares']
             total_invested += t['price'] * t['shares']
         elif t['action'] == 'sell':
-            total_returned += t['price'] * t['shares']
+            proceeds = t['price'] * t['shares']
+            total_returned += proceeds
             if ticker in positions:
-                positions[ticker]['shares'] -= t['shares']
+                sell_shares = min(t['shares'], positions[ticker]['shares'])
+                avg_cost = (positions[ticker]['cost'] / positions[ticker]['shares']
+                            if positions[ticker]['shares'] > 0 else 0)
+                cost_released = avg_cost * sell_shares
+                realized_pnl += proceeds - cost_released
+                positions[ticker]['cost'] -= cost_released
+                positions[ticker]['shares'] -= sell_shares
                 if positions[ticker]['shares'] <= 0:
                     del positions[ticker]
 
-    # 未平倉成本
-    open_cost = sum(p['cost'] for p in positions.values())
-    realized_pnl = total_returned - (total_invested - open_cost)
+    latest_prices = fetch_latest_prices(list(positions.keys()))
+    open_cost = 0.0
+    open_market_value = 0.0
+    for ticker, pos in positions.items():
+        shares = pos['shares']
+        cost = pos['cost']
+        avg_cost = cost / shares if shares > 0 else 0
+        mark_price = latest_prices.get(ticker, avg_cost)
+        open_cost += cost
+        open_market_value += mark_price * shares
 
-    # 未實現 PnL 需要當前價格（從最新報表擷取或使用成本估算）
+    unrealized_pnl = open_market_value - open_cost
+    total_pnl = realized_pnl + unrealized_pnl
+
+    equity_data = load_json(EQUITY_LOG)
+    equity_curve = equity_data.get('equity_curve', []) if isinstance(equity_data, dict) else []
+    initial_equity = equity_data.get('initial_capital') if isinstance(equity_data, dict) else None
+    current_equity = equity_curve[-1]['equity'] if equity_curve else None
+    peak_equity = None
+    drawdown_pct = None
+    if equity_curve:
+        peak_equity = max([initial_equity or 0] + [pt.get('equity', 0) for pt in equity_curve])
+        if peak_equity > 0 and current_equity is not None:
+            drawdown_pct = (current_equity / peak_equity - 1) * 100
+
     print(f"🛡️ Portfolio Hard Stop 檢查")
     print(f"   累計投入:     {total_invested:,.0f}")
     print(f"   已回收:       {total_returned:,.0f}")
     print(f"   已實現 PnL:   {realized_pnl:+,.0f}")
+    print(f"   未實現 PnL:   {unrealized_pnl:+,.0f}")
+    print(f"   MTM 總 PnL:   {total_pnl:+,.0f}")
     print(f"   未平倉檔數:   {len(positions)}")
+    if drawdown_pct is not None:
+        print(f"   權益回撤:     {drawdown_pct:+.1f}% (peak {peak_equity:,.0f})")
     print(f"   Soft stop:    -{soft_pct:.0f}%")
     print(f"   Hard stop:    -{hard_pct:.0f}%")
 
     if total_invested > 0:
-        pnl_pct = (realized_pnl / total_invested) * 100
+        pnl_pct = (total_pnl / total_invested) * 100
+        stop_pct = drawdown_pct if drawdown_pct is not None else pnl_pct
 
-        if abs(pnl_pct) > hard_pct:
+        if stop_pct <= -hard_pct:
             msg = (f"🚨🚨 HARD STOP 觸發！\n"
-                   f"已實現損益: {pnl_pct:+.1f}%\n"
-                   f"門檻: -{hard_pct:.0f}%\n"
-                   f"⚡ 建議立即全部平倉")
+                   f"MTM損益: {pnl_pct:+.1f}%\n")
+            if drawdown_pct is not None:
+                msg += f"權益回撤: {drawdown_pct:+.1f}%\n"
+            msg += (f"門檻: -{hard_pct:.0f}%\n"
+                    f"⚡ 建議立即全部平倉")
             print(f"\n{msg}")
             send_telegram(msg)
             sys.exit(2)
-        elif abs(pnl_pct) > soft_pct and pnl_pct < 0:
+        elif stop_pct <= -soft_pct:
             msg = (f"⚠️ SOFT STOP 觸發！\n"
-                   f"已實現損益: {pnl_pct:+.1f}%\n"
-                   f"門檻: -{soft_pct:.0f}%\n"
-                   f"💡 建議減半部位，暫停新進場")
+                   f"MTM損益: {pnl_pct:+.1f}%\n")
+            if drawdown_pct is not None:
+                msg += f"權益回撤: {drawdown_pct:+.1f}%\n"
+            msg += (f"門檻: -{soft_pct:.0f}%\n"
+                    f"💡 建議減半部位，暫停新進場")
             print(f"\n{msg}")
             send_telegram(msg)
             sys.exit(1)
         else:
-            print(f"   已實現損益:   {pnl_pct:+.1f}%")
+            print(f"   MTM損益率:    {pnl_pct:+.1f}%")
             print(f"   ✅ 在安全範圍內")
 
 
