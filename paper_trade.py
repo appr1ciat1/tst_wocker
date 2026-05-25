@@ -8,7 +8,7 @@ Paper Trading 比對工具
   # 1. 產出今日信號
   python paper_trade.py signals
 
-  # 2. 產出信號 + LINE 通知
+  # 2. 產出信號 + Telegram 通知
   python paper_trade.py signals --notify
 
   # 3. 記錄實際成交（手動輸入）
@@ -70,6 +70,34 @@ def save_json(path, data):
         json.dump(data, f, indent=2, ensure_ascii=False, default=str)
 
 
+def extract_signal_rows(html):
+    """從 stock_report.html 擷取買進訊號。"""
+    import re
+
+    current_pattern = (
+        r'<tr[^>]*>\s*'
+        r'<td>(\d{4})</td>\s*'
+        r'<td>[\d\.]+</td>\s*'
+        r'<td>([\d\.]+)</td>\s*'
+        r'<td>.*?建議買進.*?</td>\s*'
+        r'<td>.*?停利.*?<span[^>]*>([\d\.]+)</span>.*?'
+        r'停損.*?<span[^>]*>([\d\.]+)</span>.*?'
+        r'最晚出場.*?(\d{4}-\d{2}-\d{2})'
+    )
+    matches = re.findall(current_pattern, html, re.DOTALL)
+    if matches:
+        return matches
+
+    legacy_pattern = (
+        r'<td>(\d{4})</td>\s*<td[^>]*>[^<]*</td>\s*'
+        r'<td[^>]*>([\d\.]+)</td>\s*'
+        r'<td[^>]*>([\d\.]+)</td>\s*'
+        r'<td[^>]*>([\d\.]+)</td>'
+    )
+    return [(ticker, entry, tp, sl, '-') for ticker, entry, tp, sl
+            in re.findall(legacy_pattern, html)]
+
+
 def generate_signals(args):
     """從最新 stock_report.html 擷取今日執行計畫。"""
     import re
@@ -82,10 +110,7 @@ def generate_signals(args):
     with open(report_path) as f:
         html = f.read()
 
-    # 從 HTML 擷取「今日執行計畫」區塊
-    # 搜尋交易計畫表格中的股票
-    pattern = r'<td>(\d{4})</td>\s*<td[^>]*>[^<]*</td>\s*<td[^>]*>([\d\.]+)</td>\s*<td[^>]*>([\d\.]+)</td>\s*<td[^>]*>([\d\.]+)</td>'
-    matches = re.findall(pattern, html)
+    matches = extract_signal_rows(html)
 
     if not matches:
         # 嘗試另一種格式
@@ -107,7 +132,7 @@ def generate_signals(args):
         try:
             from strategy.institutional_flow import get_inst_flow_for_signals
             from strategy.news_sentiment import get_news_sentiment_for_signals
-            all_tickers = [t for t, _, _, _ in matches]
+            all_tickers = [t for t, _, _, _, _ in matches]
             inst_data = get_inst_flow_for_signals(all_tickers)
             news_data = get_news_sentiment_for_signals(all_tickers)
         except Exception as e:
@@ -116,15 +141,15 @@ def generate_signals(args):
     has_enrich = bool(inst_data or news_data)
 
     print(f"📋 今日執行信號 ({today}):")
-    header = f"{'股票':>6s} | {'進場價':>8s} | {'停利價':>8s} | {'停損價':>8s}"
+    header = f"{'股票':>6s} | {'進場價':>8s} | {'停利價':>8s} | {'停損價':>8s} | {'最晚出場':>12s}"
     if has_enrich:
         header += f" | {'🏛️ 籌碼':>10s} | {'📰 新聞':>10s}"
     print(header)
-    print("-" * (65 if has_enrich else 40))
+    print("-" * (82 if has_enrich else 58))
 
     new_signals = []
-    for ticker, entry, tp, sl in matches:
-        line = f"{ticker:>6s} | {entry:>8s} | {tp:>8s} | {sl:>8s}"
+    for ticker, entry, tp, sl, exit_date in matches:
+        line = f"{ticker:>6s} | {entry:>8s} | {tp:>8s} | {sl:>8s} | {exit_date:>12s}"
         if has_enrich:
             idata = inst_data.get(ticker, {})
             ndata = news_data.get(ticker, {})
@@ -139,6 +164,7 @@ def generate_signals(args):
             'entry_price': float(entry),
             'tp_price': float(tp),
             'sl_price': float(sl),
+            'exit_date': exit_date if exit_date != '-' else None,
             'status': 'pending',
             'inst_flow': inst_data.get(ticker, {}).get('change', 0.0),
             'news_score': news_data.get(ticker, {}).get('score', 0.0),
@@ -153,7 +179,14 @@ def generate_signals(args):
         if hasattr(args, 'notify') and args.notify:
             msg = f"📊 今日執行信號 ({today})\n"
             for s in new_signals:
-                msg += f"<b>{s['ticker']}</b> 進場{s['entry_price']:.1f} TP{s['tp_price']:.1f} SL{s['sl_price']:.1f}"
+                msg += (
+                    f"<b>{s['ticker']}</b> "
+                    f"進場{s['entry_price']:.1f} "
+                    f"TP{s['tp_price']:.1f} "
+                    f"SL{s['sl_price']:.1f}"
+                )
+                if s.get('exit_date'):
+                    msg += f" 最晚{s['exit_date']}"
                 if has_enrich:
                     idata = inst_data.get(s['ticker'], {})
                     ndata = news_data.get(s['ticker'], {})

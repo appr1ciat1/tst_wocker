@@ -6,7 +6,7 @@
 
 數據來源:
 - https://voidful.github.io/tw_news_stocker/
-- outputs/leaderboard_{d}d.csv (d = 1, 3, 5, 10, 30, 60)
+- docs/data/leaderboard_{d}d.csv (d = 1, 3, 5, 10, 30, 60)
 - data/news_log.jsonl (歷史累積)
 
 情緒打分規則 (來自 tw_news_stocker):
@@ -20,19 +20,21 @@ import io
 import json
 import urllib.request
 
-BASE_URL = "https://raw.githubusercontent.com/voidful/tw_news_stocker/main"
-PAGES_URL = "https://voidful.github.io/tw_news_stocker"
+RAW_DATA_URL = "https://raw.githubusercontent.com/voidful/tw_news_stocker/main/docs/data"
+PAGES_DATA_URL = "https://voidful.github.io/tw_news_stocker/data"
+LEGACY_RAW_URL = "https://raw.githubusercontent.com/voidful/tw_news_stocker/main"
 TIMEOUT = 15
 
 
-def _fetch_text(url):
+def _fetch_text(url, quiet=False):
     """從 URL 抓文字，失敗回 None。"""
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'tw_stocker/1.0'})
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             return resp.read().decode('utf-8')
     except Exception as e:
-        print(f"   ⚠️ 新聞數據抓取失敗 {url}: {e}")
+        if not quiet:
+            print(f"   ⚠️ 新聞數據抓取失敗 {url}: {e}")
         return None
 
 
@@ -61,12 +63,21 @@ def fetch_news_leaderboard(days=5):
     list[dict] or None
         排名列表，每筆含 ticker, name, score 等
     """
-    url = f"{BASE_URL}/outputs/leaderboard_{days}d.csv"
-    text = _fetch_text(url)
+    urls = [
+        f"{RAW_DATA_URL}/leaderboard_{days}d.csv",
+        f"{PAGES_DATA_URL}/leaderboard_{days}d.csv",
+        f"{LEGACY_RAW_URL}/outputs/leaderboard_{days}d.csv",
+    ]
+    text = None
+    for url in urls:
+        text = _fetch_text(url, quiet=True)
+        if text:
+            break
     if text is None:
+        print(f"   ⚠️ 新聞數據抓取失敗 leaderboard_{days}d.csv")
         return None
 
-    reader = csv.DictReader(io.StringIO(text))
+    reader = csv.DictReader(io.StringIO(text.lstrip('\ufeff')))
     results = []
     for row in reader:
         try:

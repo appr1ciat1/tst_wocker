@@ -261,63 +261,72 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         return tr.rolling(period).mean().iloc[-1]
 
     # === 繪製資金曲線（含 Benchmark） ===
-    plt.style.use('dark_background')
+    plt.style.use('default')
     fig, axes = plt.subplots(2, 1, figsize=(14, 9), height_ratios=[3, 1],
                               gridspec_kw={'hspace': 0.25})
+    fig.patch.set_facecolor('#f5f5f7')
 
     ax1, ax2 = axes
+    for ax in axes:
+        ax.set_facecolor('#ffffff')
 
     # 主圖：策略 + Benchmark
-    ax1.plot(equity_df.index, equity_df['Equity'], color='#00e5ff', lw=2, label='Strategy')
-    ax1.axhline(initial_capital, color='#555', linestyle='--', alpha=0.5, label='Initial Capital')
+    ax1.plot(equity_df.index, equity_df['Equity'], color='#007aff', lw=2, label='Strategy')
+    ax1.axhline(initial_capital, color='#8e8e93', linestyle='--', alpha=0.6, label='Initial Capital')
     ax1.fill_between(equity_df.index, initial_capital, equity_df['Equity'],
-                     where=equity_df['Equity'] >= initial_capital, alpha=0.1, color='#00e5ff')
+                     where=equity_df['Equity'] >= initial_capital, alpha=0.10, color='#007aff')
     ax1.fill_between(equity_df.index, initial_capital, equity_df['Equity'],
-                     where=equity_df['Equity'] < initial_capital, alpha=0.1, color='#ff4444')
+                     where=equity_df['Equity'] < initial_capital, alpha=0.12, color='#ff3b30')
 
     if benchmark_equity is not None and len(benchmark_equity) > 0:
         # 將 benchmark 縮放到同一起始資金
         common_idx = equity_df.index.intersection(benchmark_equity.index)
         if len(common_idx) > 0:
             bench_scaled = benchmark_equity.loc[common_idx] * initial_capital
-            ax1.plot(common_idx, bench_scaled, color='#ffab00', lw=1.5, alpha=0.8,
+            ax1.plot(common_idx, bench_scaled, color='#ff9500', lw=1.5, alpha=0.85,
                      label='0050 Buy & Hold', linestyle='--')
 
     if ew_equity is not None and len(ew_equity) > 0:
         common_idx = equity_df.index.intersection(ew_equity.index)
         if len(common_idx) > 0:
             ew_scaled = ew_equity.loc[common_idx] * initial_capital
-            ax1.plot(common_idx, ew_scaled, color='#ab47bc', lw=1.2, alpha=0.6,
+            ax1.plot(common_idx, ew_scaled, color='#af52de', lw=1.2, alpha=0.65,
                      label='Equal-Weight', linestyle=':')
 
     if benchmark2_equity is not None and len(benchmark2_equity) > 0:
         common_idx = equity_df.index.intersection(benchmark2_equity.index)
         if len(common_idx) > 0:
             bench2_scaled = benchmark2_equity.loc[common_idx] * initial_capital
-            ax1.plot(common_idx, bench2_scaled, color='#69f0ae', lw=1.5, alpha=0.8,
+            ax1.plot(common_idx, bench2_scaled, color='#34c759', lw=1.5, alpha=0.85,
                      label='00981A Buy & Hold', linestyle='-.')
 
     mode_label = f"ATR×{config.get('tp_atr_mult', 3)}/{config.get('sl_atr_mult', 1.5)}" \
         if tp_sl_mode == 'atr' else f"TP +{tp_pct*100:.0f}% / SL -{sl_pct*100:.0f}%"
     ax1.set_title(f'AI Quant v8  |  {mode_label}  |  Top-{top_k}  |  Hold ≤{max_hold_days}D',
-                  fontweight='bold', fontsize=14, color='#fff')
-    ax1.set_ylabel('Portfolio Value (TWD)', fontsize=11)
+                  fontweight='bold', fontsize=14, color='#1d1d1f')
+    ax1.set_ylabel('Portfolio Value (TWD)', fontsize=11, color='#1d1d1f')
+    ax1.tick_params(colors='#1d1d1f')
     ax1.legend(fontsize=9, loc='upper left')
-    ax1.grid(alpha=0.15)
+    ax1.grid(alpha=0.08, color='#000000')
+    for spine in ax1.spines.values():
+        spine.set_color('#d2d2d7')
 
     # 子圖：Drawdown
     equity = equity_df['Equity']
     cummax = equity.cummax()
     drawdown = (equity / cummax - 1) * 100
-    ax2.fill_between(drawdown.index, 0, drawdown, color='#ff4444', alpha=0.4)
-    ax2.plot(drawdown.index, drawdown, color='#ff4444', lw=1)
-    ax2.set_ylabel('Drawdown (%)', fontsize=10)
+    ax2.fill_between(drawdown.index, 0, drawdown, color='#ff3b30', alpha=0.35)
+    ax2.plot(drawdown.index, drawdown, color='#ff3b30', lw=1)
+    ax2.set_ylabel('Drawdown (%)', fontsize=10, color='#1d1d1f')
     ax2.set_xlabel('')
-    ax2.grid(alpha=0.15)
+    ax2.tick_params(colors='#1d1d1f')
+    ax2.grid(alpha=0.08, color='#000000')
     ax2.set_ylim(drawdown.min() * 1.2, 2)
+    for spine in ax2.spines.values():
+        spine.set_color('#d2d2d7')
 
     fig.tight_layout()
-    fig.savefig('backtest_chart.png', dpi=150, bbox_inches='tight', facecolor='#121212')
+    fig.savefig('backtest_chart.png', dpi=150, bbox_inches='tight', facecolor='#f5f5f7')
     plt.close(fig)
     print("   📈 資金曲線已存為 backtest_chart.png")
 
@@ -932,114 +941,161 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     <title>AI 台股量化交易 v8.5 — {report_date}</title>
     <meta name="description" content="AI 驅動的台股量化交易系統 v8.5，完整風險報告、Benchmark 對比、OCO 智慧掛單建議">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{
-            font-family: 'Inter', -apple-system, sans-serif;
-            background: #0a0a0f;
-            color: #e0e0e0;
-            padding: 24px;
-            line-height: 1.6;
+        :root {{
+            --bg: #f5f5f7;
+            --surface: #ffffff;
+            --surface-soft: #fbfbfd;
+            --text: #1d1d1f;
+            --muted: #86868b;
+            --border: #d2d2d7;
+            --line: #f2f2f7;
+            --blue: #007aff;
+            --green: #34c759;
+            --red: #ff3b30;
+            --orange: #ff9500;
+            --purple: #af52de;
+            --shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
         }}
-        .container {{ max-width: 1200px; margin: 0 auto; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            padding: 40px 24px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }}
+        .container {{ max-width: 1120px; margin: 0 auto; }}
         h1 {{
-            font-size: 1.8rem;
-            color: #00e5ff;
-            border-bottom: 2px solid #1a1a2e;
-            padding-bottom: 12px;
+            font-size: 2.2rem;
+            font-weight: 650;
+            letter-spacing: 0;
+            text-align: center;
             margin-bottom: 8px;
         }}
         h2 {{
-            font-size: 1.3rem;
-            color: #00e5ff;
-            margin-top: 32px;
-            margin-bottom: 12px;
-            padding-bottom: 6px;
-            border-bottom: 1px solid #1a1a2e;
+            font-size: 1.35rem;
+            font-weight: 650;
+            letter-spacing: 0;
+            margin-top: 40px;
+            margin-bottom: 14px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
         }}
         .subtitle {{
-            color: #888;
-            font-size: 0.9rem;
-            margin-bottom: 24px;
+            color: var(--muted);
+            font-size: 0.95rem;
+            text-align: center;
+            margin-bottom: 32px;
+            font-weight: 500;
         }}
         .stats {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            gap: 10px;
-            margin-bottom: 28px;
+            gap: 14px;
+            margin-bottom: 30px;
         }}
         .stat-card {{
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            padding: 16px;
-            border-radius: 12px;
+            background: var(--surface);
+            padding: 18px 16px;
+            border-radius: 8px;
             text-align: center;
-            border-left: 4px solid #00e5ff;
+            border: 1px solid rgba(0, 0, 0, 0.03);
+            box-shadow: var(--shadow);
         }}
-        .stat-card.risk {{ border-left-color: #ab47bc; }}
-        .stat-card.benchmark {{ border-left-color: #ffab00; }}
+        .stat-card.risk {{ border-top: 3px solid var(--purple); }}
+        .stat-card.benchmark {{ border-top: 3px solid var(--orange); }}
         .stat-card .value {{
-            font-size: 1.5rem;
-            font-weight: 700;
-            margin: 4px 0;
+            font-size: 1.55rem;
+            font-weight: 650;
+            margin: 6px 0;
+            letter-spacing: 0;
         }}
         .stat-card .label {{
             font-size: 0.75rem;
-            color: #888;
+            color: var(--muted);
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.04em;
+            font-weight: 600;
         }}
         table {{
             width: 100%;
-            border-collapse: collapse;
-            margin-top: 8px;
-            background: #1a1a2e;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin-top: 10px;
+            background: var(--surface);
             border-radius: 8px;
+            box-shadow: var(--shadow);
             overflow: hidden;
         }}
         th, td {{
-            padding: 10px 12px;
+            padding: 13px 14px;
             text-align: left;
-            border-bottom: 1px solid #252540;
-            font-size: 0.85rem;
+            border-bottom: 1px solid var(--line);
+            font-size: 0.88rem;
+            vertical-align: top;
         }}
         th {{
-            background: #16213e;
-            color: #00e5ff;
+            background: var(--surface-soft);
+            color: var(--muted);
             font-weight: 600;
             font-size: 0.78rem;
             text-transform: uppercase;
-            letter-spacing: 0.3px;
+            letter-spacing: 0.02em;
         }}
-        tr:hover {{ background: #16213e; }}
+        tr:last-child td {{ border-bottom: none; }}
+        tr:hover td {{ background: #f7f7fa; }}
         img {{
             max-width: 100%;
-            border-radius: 10px;
-            margin-top: 12px;
-            border: 1px solid #252540;
+            border-radius: 8px;
+            margin-top: 14px;
+            border: 1px solid rgba(0, 0, 0, 0.03);
+            box-shadow: var(--shadow);
         }}
         .disclaimer {{
-            margin-top: 40px;
-            padding: 16px;
-            background: #1a1a0e;
-            border-left: 4px solid #ffab00;
+            margin-top: 52px;
+            padding: 22px;
+            background: var(--surface);
+            border: 1px solid rgba(0, 0, 0, 0.03);
             border-radius: 8px;
-            font-size: 0.82rem;
-            color: #999;
+            font-size: 0.85rem;
+            color: var(--muted);
+            line-height: 1.6;
+            text-align: center;
+            box-shadow: var(--shadow);
         }}
         .config-badge {{
             display: inline-block;
-            padding: 3px 10px;
-            border-radius: 6px;
-            font-size: 0.72rem;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.75rem;
             font-weight: 600;
-            background: #16213e;
-            color: #00e5ff;
+            background: #e8e8ed;
+            color: var(--text);
             margin: 2px;
         }}
         .section-note {{
-            font-size: 0.8rem;
-            color: #666;
-            margin-bottom: 8px;
+            font-size: 0.85rem;
+            color: var(--muted);
+            margin-bottom: 10px;
+        }}
+        a {{ color: var(--blue); text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+        span[style*="color:#00ff00"], b[style*="color:#00ff00"], div[style*="color:#00ff00"], td[style*="color:#00ff00"] {{ color: var(--green) !important; }}
+        span[style*="color:#ff4444"], b[style*="color:#ff4444"], div[style*="color:#ff4444"], td[style*="color:#ff4444"] {{ color: var(--red) !important; }}
+        span[style*="color:#ffab00"], div[style*="color:#ffab00"], td[style*="color:#ffab00"] {{ color: var(--orange) !important; }}
+        span[style*="color:#00e5ff"], h3[style*="color:#00e5ff"] {{ color: var(--blue) !important; }}
+        span[style*="color:#aaaaaa"], span[style*="color:#888"], td[style*="color:#888"] {{ color: var(--muted) !important; }}
+        div[style*="background:linear-gradient"] {{ filter: brightness(0.9) saturate(1.2); }}
+        @media (max-width: 720px) {{
+            body {{ padding: 24px 12px; }}
+            h1 {{ font-size: 1.7rem; }}
+            h2 {{ font-size: 1.15rem; margin-top: 30px; }}
+            .stats {{ grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 10px; }}
+            .stat-card {{ padding: 14px 12px; }}
+            .stat-card .value {{ font-size: 1.25rem; }}
+            table {{ display: block; overflow-x: auto; white-space: nowrap; }}
+            th, td {{ padding: 11px 12px; font-size: 0.82rem; }}
         }}
     </style>
 </head>
