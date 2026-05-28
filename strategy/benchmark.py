@@ -58,6 +58,16 @@ def fetch_benchmark(ticker='0050', days=800, start_date=None, end_date=None):
     if isinstance(close, pd.DataFrame):
         close = close.iloc[:, 0]
 
+    close = pd.to_numeric(close, errors='coerce').replace([np.inf, -np.inf], np.nan)
+    dropped_count = int(close.isna().sum())
+    close = close.dropna()
+    if close.empty:
+        print(f"   ⚠️ {ticker} 無有效收盤價資料")
+        return pd.Series(dtype=float)
+
+    if dropped_count:
+        print(f"   ℹ️ 已忽略 {dropped_count} 筆無效收盤價")
+
     benchmark_equity = close / close.iloc[0]
 
     print(f"   ✅ Benchmark 下載完成: {close.index[0].strftime('%Y-%m-%d')}"

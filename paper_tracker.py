@@ -172,11 +172,13 @@ def update_tracker(data):
     sell_cost_rate = 0.004425
     slippage = 0.001
     max_hold = 20
-    position_size = 0.10
+    reserve_ratio = 0.10
+    reserve_cash = data['initial_capital'] * reserve_ratio
 
     print(f"📊 Paper Tracker 更新 ({today})")
     print(f"   初始資金: {data['initial_capital']:,.0f}")
     print(f"   當前現金: {data['capital']:,.0f}")
+    print(f"   保留現金: {reserve_cash:,.0f} ({reserve_ratio:.0%} 本金)")
     print(f"   持倉檔數: {len(data['positions'])}")
 
     # 0. 避免重複執行
@@ -249,8 +251,11 @@ def update_tracker(data):
     if signals:
         data['daily_signals'].append({'date': today, 'tickers': signal_tickers})
         max_new = 7 - len(data['positions'])
+        candidates = []
         opened = 0
-        for sig in signals[:max_new]:
+        for sig in signals:
+            if len(candidates) >= max_new:
+                break
             ticker = sig['ticker']
             if ticker in data['positions']:
                 continue
@@ -267,22 +272,44 @@ def update_tracker(data):
                 print(f"   ⏭️ 未成交 {ticker}: low {low_price:.1f} > limit {limit_price:.1f}")
                 continue
             entry_price = min(open_price, limit_price) if open_price is not None and open_price <= limit_price else limit_price
-            trade_amount = data['capital'] * position_size
-            buy_cost = trade_amount * (buy_cost_rate + slippage)
-            if data['capital'] >= trade_amount + buy_cost:
-                shares = trade_amount / entry_price
-                data['capital'] -= (trade_amount + buy_cost)
-                data['positions'][ticker] = {
-                    'entry': entry_price,
-                    'tp': sig['tp'],
-                    'sl': sig['sl'],
-                    'entry_date': today,
-                    'shares': round(shares, 0),
-                    'day_count': 0,
-                    'max_hold_days': sig.get('max_hold_days', max_hold),
-                }
-                opened += 1
-                print(f"   🆕 開倉 {ticker} @ {entry_price:.1f} (TP {sig['tp']:.1f} / SL {sig['sl']:.1f})")
+            candidates.append((sig, entry_price))
+
+        for idx, (sig, entry_price) in enumerate(candidates):
+            available_cash = max(data['capital'] - reserve_cash, 0)
+            remaining_candidates = len(candidates) - idx
+            if available_cash <= 0:
+                print(f"   💵 保留本金 10%，可投入現金不足，停止開倉")
+                break
+
+            gross_budget = available_cash / remaining_candidates
+            trade_amount = gross_budget / (1 + buy_cost_rate + slippage)
+            shares = int(trade_amount / entry_price)
+            if shares <= 0:
+                print(f"   💵 資金不足 {sig['ticker']}: 無法在保留本金 10% 後買進")
+                continue
+
+            actual_trade_amount = shares * entry_price
+            buy_cost = actual_trade_amount * (buy_cost_rate + slippage)
+            if data['capital'] - actual_trade_amount - buy_cost < reserve_cash:
+                print(f"   💵 資金不足 {sig['ticker']}: 保留本金 10% 後不開倉")
+                continue
+
+            ticker = sig['ticker']
+            data['capital'] -= (actual_trade_amount + buy_cost)
+            data['positions'][ticker] = {
+                'entry': entry_price,
+                'tp': sig['tp'],
+                'sl': sig['sl'],
+                'entry_date': today,
+                'shares': shares,
+                'day_count': 0,
+                'max_hold_days': sig.get('max_hold_days', max_hold),
+            }
+            opened += 1
+            print(
+                f"   🆕 開倉 {ticker} @ {entry_price:.1f} × {shares:,.0f} "
+                f"(投入 {actual_trade_amount:,.0f}, TP {sig['tp']:.1f} / SL {sig['sl']:.1f})"
+            )
         if opened:
             print(f"   ✅ 今日開倉 {opened} 檔")
     else:
@@ -476,7 +503,7 @@ def generate_html(data):
     <h1>📈 Paper Trading v8.5</h1>
     <p class="subtitle">
         <span class="badge badge-live">● LIVE</span>
-        起始日 {data['start_date']} | 更新 {today} | 初始資金 {initial:,.0f}
+        起始日 {data['start_date']} | 更新 {today} | 初始資金 {initial:,.0f} | 保留本金 10%，其餘投入
     </p>
 
     <div class="metrics">
