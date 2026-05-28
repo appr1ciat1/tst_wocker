@@ -89,7 +89,7 @@ jobs:
           git config --global user.email "voidful.stack@gmail.com"
           git config --global user.name "Voidful"
 
-          git add stock_report.html paper_trading.html paper_equity.json || true
+          git add stock_report.html backtest_chart.png paper_trading.html paper_equity.json || true
           git add -u artifacts || true
 
           if git diff --cached --quiet; then
