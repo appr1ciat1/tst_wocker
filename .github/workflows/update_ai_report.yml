@@ -90,11 +90,17 @@ jobs:
           git config --global user.name "Voidful"
 
           git add stock_report.html paper_trading.html paper_equity.json || true
-          git commit -m "📊 AI Report v8.5 + Paper Trading ($(date -u '+%Y-%m-%d'))" || echo "No changes"
+          git add -u artifacts || true
+
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "📊 AI Report v8.5 + Paper Trading ($(date -u '+%Y-%m-%d'))"
+          fi
 
           # Rebase onto latest remote to prevent non-fast-forward rejection
           git fetch origin main
-          git rebase origin/main
+          git rebase --autostash origin/main
 
           git push origin HEAD:main
 
@@ -149,10 +155,16 @@ jobs:
           git config --global user.name "Voidful"
 
           git add factor_search_results.csv ablation_results.csv backtest_chart.png || true
-          git commit -m "🔄 Quarterly health check ($(date -u '+%Y-%m-%d'))" || echo "No changes"
+          git add -u artifacts || true
+
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "🔄 Quarterly health check ($(date -u '+%Y-%m-%d'))"
+          fi
 
           # Rebase onto latest remote to prevent non-fast-forward rejection
           git fetch origin main
-          git rebase origin/main
+          git rebase --autostash origin/main
 
           git push origin HEAD:main
