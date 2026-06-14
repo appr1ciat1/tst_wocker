@@ -74,6 +74,25 @@ def v3_production_kwargs(rotation_trigger=None, crisis_vol=None):
     }
 
 
+def v3_vol_target_config() -> VolTargetConfig:
+    """VolTargetConfig for paper tracker / replay — identical tiered params to V3 backtest."""
+    kw = v3_production_kwargs()
+    return VolTargetConfig(
+        target_ann_vol=TARGET_ANN_VOL_DEFAULT,
+        rotation_trigger_vol=kw['rotation_trigger_vol'],
+        crisis_vol=kw['crisis_vol'],
+        cooling_days=kw['cooling_days'],
+        cooling_sat_boost=kw['cooling_sat_boost'],
+        cooling_core_boost=kw['cooling_core_boost'],
+        stress_sat_floor=kw['stress_sat_floor'],
+        stress_core_ceiling=kw['stress_core_ceiling'],
+        sat_alpha_trim_frac=kw['sat_alpha_trim_frac'],
+        sat_alpha_trim_min_pnl=kw['sat_alpha_trim_min_pnl'],
+        core_alpha_trim_frac=kw['core_alpha_trim_frac'],
+        core_alpha_trim_min_pnl=kw['core_alpha_trim_min_pnl'],
+    )
+
+
 def build_v3_production_backtester(args):
     """Construct EventDrivenBacktester identical to run_full_sweep / compare_v85_v9."""
     from strategy.event_backtest import EventDrivenBacktester

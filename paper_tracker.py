@@ -27,10 +27,10 @@ import pandas as pd
 
 # v9 Hybrid Tiered support
 from strategy.portfolio_vol_target import (
-    PortfolioVolatilityTarget, VolTargetConfig, TARGET_ANN_VOL_DEFAULT,
+    PortfolioVolatilityTarget, TARGET_ANN_VOL_DEFAULT,
     COOLING_DAYS_DEFAULT, SAT_ALPHA_TRIM_FRAC_DEFAULT,
     SAT_ALPHA_TRIM_MIN_PNL_DEFAULT, CORE_ALPHA_TRIM_FRAC_DEFAULT,
-    CORE_ALPHA_TRIM_MIN_PNL_DEFAULT,
+    CORE_ALPHA_TRIM_MIN_PNL_DEFAULT, v3_vol_target_config,
 )
 from strategy.risk_metrics import compute_tiered_risk_summary, format_tiered_risk_summary
 from strategy.core_holdings import CoreHoldingsManager
@@ -79,7 +79,9 @@ def get_current_bars(tickers):
 
     def download(symbols):
         try:
-            return yf.download(symbols, period='5d', progress=False)
+            return yf.download(
+                symbols, period='5d', progress=False, auto_adjust=False, threads=True,
+            )
         except Exception:
             return None
 
@@ -118,6 +120,9 @@ def get_current_bars(tickers):
         if missing:
             two_symbols = {t: f"{t}.TWO" for t in missing}
             bars.update(read_bars(download(list(two_symbols.values())), two_symbols))
+        still_missing = [t for t in tickers if t not in bars]
+        if still_missing:
+            print(f"   ⚠️ 無法取得報價: {', '.join(still_missing)}")
     except Exception as e:
         print(f"   ⚠️ 價格下載失敗: {e}")
     return bars
@@ -268,33 +273,136 @@ def extract_signals_from_report():
 def update_tracker(data):
     """主要更新邏輯：追蹤持倉、結算已平倉、記錄新信號。"""
     today = date.today().isoformat()
-    buy_cost_rate = 0.001425
-    sell_cost_rate = 0.004425
-    slippage = 0.001
-    max_hold = 20
-    reserve_ratio = 0.10
-    reserve_cash = data['initial_capital'] * reserve_ratio
+    reserve_cash = data['initial_capital'] * RESERVE_RATIO
 
     print(f"📊 Paper Tracker 更新 ({today})")
     print(f"   初始資金: {data['initial_capital']:,.0f}")
     print(f"   當前現金: {data['capital']:,.0f}")
-    print(f"   保留現金: {reserve_cash:,.0f} ({reserve_ratio:.0%} 本金)")
+    print(f"   保留現金: {reserve_cash:,.0f} ({RESERVE_RATIO:.0%} 本金)")
     print(f"   持倉檔數: {len(data['positions'])}")
 
-    # 0. 避免重複執行
     if data['equity_curve'] and data['equity_curve'][-1].get('date') == today:
         print(f"   ⚠️ 今日已更新過，跳過")
         return
 
-    # 1. 取得所有相關股票的最新價格
     all_tickers = list(data['positions'].keys())
     signals = extract_signals_from_report()
     signal_tickers = [s['ticker'] for s in signals]
-    all_tickers_set = set(all_tickers + signal_tickers)
-    bars = get_current_bars(list(all_tickers_set))
-    prices = {ticker: bar['close'] for ticker, bar in bars.items()}
+    bars = get_current_bars(list(set(all_tickers + signal_tickers)))
+    _process_trading_day(data, today, bars, signals, verbose=True)
 
-    # 2. 追蹤已持倉：檢查 TP/SL/時間到期
+
+BUY_COST_RATE = 0.001425
+SELL_COST_RATE = 0.004425
+SLIPPAGE = 0.001
+MAX_HOLD_DAYS = 20
+RESERVE_RATIO = 0.10
+TOP_K = 7
+COOLING_CORE_TRIM_FRAC = 0.20
+COOLING_CORE_TRIM_MIN_PNL_PCT = 4.0
+
+
+def _empty_tiered():
+    return {
+        "overall": 1.0, "core_trade_scale": 1.0, "sat_trade_scale": 1.0,
+        "core_rotation_boost": 1.0, "sat_rotation_boost": 1.0,
+        "vol_regime": 'normal', "rotate_sat_profits_to_core": 0.0,
+        "rotate_core_profits_to_sat": 0.0, "sat_entry_freeze": 0.0,
+    }
+
+
+def _make_v3_pvt(data: dict) -> PortfolioVolatilityTarget:
+    pvt = PortfolioVolatilityTarget(v3_vol_target_config())
+    pvt._prev_forecast_vol = data.get('last_fvol')
+    pvt._cooling_days_left = data.get('cooling_days_left', 0)
+    return pvt
+
+
+def _equity_series(data: dict, key: str) -> pd.Series:
+    return pd.Series([p['equity'] for p in data.get(key, [])[-60:]])
+
+
+def _vol_forecast_inputs(data: dict, day: Optional[str] = None) -> tuple:
+    """Paper live uses simulated curves; replay prefers backtest equity for vol alignment."""
+    bt_df = data.get('_bt_equity_df')
+    if bt_df is not None and day:
+        try:
+            sub = bt_df[bt_df['Date'] < pd.Timestamp(day)].tail(60)
+            if len(sub) >= 5:
+                return None, None, pd.Series(sub['Equity'].astype(float).values)
+        except Exception:
+            pass
+    return (
+        _equity_series(data, 'core_equity_curve'),
+        _equity_series(data, 'sat_equity_curve'),
+        _equity_series(data, 'equity_curve'),
+    )
+
+
+def _compute_tiered_for_sizing(data: dict, day: Optional[str] = None) -> dict:
+    tiered = _empty_tiered()
+    try:
+        pvt = _make_v3_pvt(data)
+        ec, es, em = _vol_forecast_inputs(data, day)
+        fvol = pvt.forecast_portfolio_ann_vol(ec, es, em)
+        tiered = pvt.tiered_scale_factors(fvol)
+        if tiered.get('cooling_transition', 0) >= 1.0:
+            data['cooling_days_left'] = COOLING_DAYS_DEFAULT
+        elif data.get('cooling_days_left', 0) > 0:
+            data['cooling_days_left'] -= 1
+        data['last_fvol'] = fvol
+    except Exception:
+        pass
+    return tiered
+
+
+def _trim_book_for_rotation(data, bars, book, trim_frac, min_pnl_pct, label, emoji, verbose=True):
+    for ticker, pos in list(data['positions'].items()):
+        if pos.get('book', classify_book(ticker)) != book:
+            continue
+        bar = bars.get(ticker)
+        if not bar or bar.get('close') is None:
+            continue
+        pnl_pct = (bar['close'] / pos['entry'] - 1) * 100
+        if pnl_pct < min_pnl_pct:
+            continue
+        shares_sell = int(pos['shares'] * trim_frac)
+        if shares_sell <= 0:
+            continue
+        exit_price = bar['close']
+        sell_cost = exit_price * shares_sell * SELL_COST_RATE
+        slippage_cost = exit_price * shares_sell * SLIPPAGE
+        proceeds = exit_price * shares_sell - sell_cost - slippage_cost
+        data['capital'] += proceeds
+        pos['shares'] -= shares_sell
+        if verbose:
+            print(f"   {emoji} {label} {ticker}: 減碼 {shares_sell:,.0f} 股 ({pnl_pct:+.1f}%)")
+
+
+def _apply_rotation_trims(data, bars, tiered_for_sizing, verbose=True):
+    if tiered_for_sizing.get('rotate_sat_profits_to_core', 0) >= 1.0:
+        _trim_book_for_rotation(
+            data, bars, 'satellite',
+            SAT_ALPHA_TRIM_FRAC_DEFAULT,
+            SAT_ALPHA_TRIM_MIN_PNL_DEFAULT * 100,
+            '輪動至Core(波動升破)', '🟠', verbose,
+        )
+    if tiered_for_sizing.get('rotate_core_profits_to_sat', 0) >= 1.0:
+        _trim_book_for_rotation(
+            data, bars, 'core',
+            CORE_ALPHA_TRIM_FRAC_DEFAULT,
+            CORE_ALPHA_TRIM_MIN_PNL_DEFAULT * 100,
+            '輪動回Sat(波動回落)', '🔵', verbose,
+        )
+    elif data.get('cooling_days_left', 0) > 0:
+        _trim_book_for_rotation(
+            data, bars, 'core',
+            COOLING_CORE_TRIM_FRAC, COOLING_CORE_TRIM_MIN_PNL_PCT,
+            '輪動回Sat(冷卻續跑)', '🔵', verbose,
+        )
+
+
+def _close_positions(data, day, bars, verbose=True):
     to_close = []
     for ticker, pos in data['positions'].items():
         pos['day_count'] = pos.get('day_count', 0) + 1
@@ -304,8 +412,7 @@ def update_tracker(data):
 
         reason = None
         exit_price = bar['close']
-        pos_max_hold = pos.get('max_hold_days', max_hold)
-        # Conservative same-day ordering: SL before TP, matching backtest.
+        pos_max_hold = pos.get('max_hold_days', MAX_HOLD_DAYS)
         if bar.get('low') is not None and bar['low'] <= pos['sl']:
             reason = 'SL'
             open_price = bar.get('open')
@@ -319,14 +426,12 @@ def update_tracker(data):
             exit_price = bar['close']
 
         if reason:
-            # 計算 PnL
-            sell_cost = exit_price * pos['shares'] * sell_cost_rate
-            slippage_cost = exit_price * pos['shares'] * slippage
+            sell_cost = exit_price * pos['shares'] * SELL_COST_RATE
+            slippage_cost = exit_price * pos['shares'] * SLIPPAGE
             proceeds = exit_price * pos['shares'] - sell_cost - slippage_cost
-            cost_basis = pos['entry'] * pos['shares'] * (1 + buy_cost_rate + slippage)
+            cost_basis = pos['entry'] * pos['shares'] * (1 + BUY_COST_RATE + SLIPPAGE)
             pnl = proceeds - cost_basis
             pnl_pct = (exit_price / pos['entry'] - 1) * 100
-
             data['capital'] += proceeds
             book = pos.get('book', classify_book(ticker))
             data['closed_trades'].append({
@@ -338,226 +443,200 @@ def update_tracker(data):
                 'pnl_pct': round(pnl_pct, 2),
                 'reason': reason,
                 'entry_date': pos['entry_date'],
-                'exit_date': today,
+                'exit_date': day,
                 'days_held': pos['day_count'],
                 'book': book,
             })
             to_close.append(ticker)
-            emoji = '🟢' if pnl > 0 else '🔴'
-            print(f"   {emoji} 平倉 {ticker}: {pos['entry']:.1f}→{exit_price:.1f} ({pnl_pct:+.1f}%) [{reason}] 持{pos['day_count']}天")
+            if verbose:
+                emoji = '🟢' if pnl > 0 else '🔴'
+                print(
+                    f"   {emoji} 平倉 {ticker}: {pos['entry']:.1f}→{exit_price:.1f} "
+                    f"({pnl_pct:+.1f}%) [{reason}] 持{pos['day_count']}天"
+                )
 
-    for t in to_close:
-        del data['positions'][t]
+    for ticker in to_close:
+        del data['positions'][ticker]
+    return to_close
 
-    # 3. 記錄今日信號 & 開新倉
-    # v9: 先計算當前 tiered scales（用歷史 equity 預測），作為新開倉的風險調整依據
-    tiered_for_sizing = {"overall": 1.0, "core_trade_scale": 1.0, "sat_trade_scale": 1.0,
-                         "core_rotation_boost": 1.0, "sat_rotation_boost": 1.0,
-                         "vol_regime": 'normal', "rotate_sat_profits_to_core": 0.0,
-                         "rotate_core_profits_to_sat": 0.0}
-    try:
-        pvt = PortfolioVolatilityTarget(VolTargetConfig(target_ann_vol=TARGET_ANN_VOL_DEFAULT))
-        pvt._prev_forecast_vol = data.get('last_fvol')
-        pvt._cooling_days_left = data.get('cooling_days_left', 0)
-        fvol_preview = pvt.forecast_portfolio_ann_vol(
-            pd.Series([p['equity'] for p in data.get('core_equity_curve', [])[-60:]]),
-            pd.Series([p['equity'] for p in data.get('sat_equity_curve', [])[-60:]]),
-            pd.Series([p['equity'] for p in data.get('equity_curve', [])[-60:]]),
-        )
-        tiered_for_sizing = pvt.tiered_scale_factors(fvol_preview)
-        if tiered_for_sizing.get('cooling_transition', 0) >= 1.0:
-            data['cooling_days_left'] = COOLING_DAYS_DEFAULT
-        elif data.get('cooling_days_left', 0) > 0:
-            data['cooling_days_left'] -= 1
-        data['last_fvol'] = fvol_preview
-        print(
-            f"   📐 [v9] regime={tiered_for_sizing.get('vol_regime', 'normal')} "
-            f"core_rot={tiered_for_sizing.get('core_rotation_boost', 1.0):.2f} "
-            f"sat_rot={tiered_for_sizing.get('sat_rotation_boost', 1.0):.2f} "
-            f"cooling={int(data.get('cooling_days_left', 0))}d"
-        )
-    except Exception:
-        pass
 
-    def _trim_book_for_rotation(book, trim_frac, min_pnl_pct, label, emoji):
-        for ticker, pos in list(data['positions'].items()):
-            if pos.get('book', classify_book(ticker)) != book:
-                continue
-            bar = bars.get(ticker)
-            if not bar or bar.get('close') is None:
-                continue
-            pnl_pct = (bar['close'] / pos['entry'] - 1) * 100
-            if pnl_pct < min_pnl_pct:
-                continue
-            shares_sell = int(pos['shares'] * trim_frac)
-            if shares_sell <= 0:
-                continue
-            exit_price = bar['close']
-            sell_cost = exit_price * shares_sell * sell_cost_rate
-            slippage_cost = exit_price * shares_sell * slippage
-            proceeds = exit_price * shares_sell - sell_cost - slippage_cost
-            data['capital'] += proceeds
-            pos['shares'] -= shares_sell
-            print(f"   {emoji} {label} {ticker}: 減碼 {shares_sell:,.0f} 股 ({pnl_pct:+.1f}%)")
+def _open_positions(data, day, bars, signals, tiered_for_sizing, verbose=True):
+    if not signals:
+        if verbose:
+            print(f"   📋 今日無信號")
+        return 0
 
-    if tiered_for_sizing.get('rotate_sat_profits_to_core', 0) >= 1.0:
-        _trim_book_for_rotation(
-            'satellite',
-            SAT_ALPHA_TRIM_FRAC_DEFAULT,
-            SAT_ALPHA_TRIM_MIN_PNL_DEFAULT * 100,
-            '輪動至Core(波動升破)',
-            '🟠',
-        )
-    if tiered_for_sizing.get('rotate_core_profits_to_sat', 0) >= 1.0:
-        _trim_book_for_rotation(
-            'core',
-            CORE_ALPHA_TRIM_FRAC_DEFAULT,
-            CORE_ALPHA_TRIM_MIN_PNL_DEFAULT * 100,
-            '輪動回Sat(波動回落)',
-            '🔵',
-        )
-    elif data.get('cooling_days_left', 0) > 0:
-        _trim_book_for_rotation('core', 0.20, 4.0, '輪動回Sat(冷卻續跑)', '🔵')
+    signal_tickers = [s['ticker'] for s in signals]
+    data['daily_signals'].append({'date': day, 'tickers': signal_tickers})
+    max_new = TOP_K - len(data['positions'])
+    candidates = []
+    reserve_cash = data['initial_capital'] * RESERVE_RATIO
 
-    if signals:
-        data['daily_signals'].append({'date': today, 'tickers': signal_tickers})
-        max_new = 7 - len(data['positions'])
-        candidates = []
-        opened = 0
-        for sig in signals:
-            if len(candidates) >= max_new:
-                break
-            ticker = sig['ticker']
-            if ticker in data['positions']:
-                continue
-            book_check = classify_book(ticker)
-            if (book_check == 'satellite'
-                    and tiered_for_sizing.get('sat_entry_freeze', 0) >= 1.0):
+    for sig in signals:
+        if len(candidates) >= max_new:
+            break
+        ticker = sig['ticker']
+        if ticker in data['positions']:
+            continue
+        execution_date = sig.get('execution_date')
+        if execution_date and execution_date > day:
+            continue
+        book_check = sig.get('book') or classify_book(ticker)
+        if (book_check == 'satellite'
+                and tiered_for_sizing.get('sat_entry_freeze', 0) >= 1.0):
+            if verbose:
                 print(f"   🛑 [v9 危機] 暫停 Satellite 新倉 {ticker}")
-                continue
-            execution_date = sig.get('execution_date')
-            if execution_date and execution_date > today:
-                continue
-            bar = bars.get(ticker)
-            if bar is None:
-                continue
-            limit_price = sig['entry']
-            open_price = bar.get('open')
-            low_price = bar.get('low')
-            if low_price is not None and low_price > limit_price:
+            continue
+        bar = bars.get(ticker)
+        if bar is None:
+            if verbose:
+                print(f"   ⚠️ 跳過 {ticker}: 無當日報價")
+            continue
+        limit_price = sig['entry']
+        open_price = bar.get('open')
+        low_price = bar.get('low')
+        if low_price is not None and low_price > limit_price:
+            if verbose:
                 print(f"   ⏭️ 未成交 {ticker}: low {low_price:.1f} > limit {limit_price:.1f}")
-                continue
-            entry_price = min(open_price, limit_price) if open_price is not None and open_price <= limit_price else limit_price
-            candidates.append((sig, entry_price))
+            continue
+        entry_price = (
+            min(open_price, limit_price)
+            if open_price is not None and open_price <= limit_price
+            else limit_price
+        )
+        candidates.append((sig, entry_price))
 
-        for idx, (sig, entry_price) in enumerate(candidates):
-            available_cash = max(data['capital'] - reserve_cash, 0)
-            remaining_candidates = len(candidates) - idx
-            if available_cash <= 0:
+    opened = 0
+    for idx, (sig, entry_price) in enumerate(candidates):
+        available_cash = max(data['capital'] - reserve_cash, 0)
+        remaining_candidates = len(candidates) - idx
+        if available_cash <= 0:
+            if verbose:
                 print(f"   💵 保留本金 10%，可投入現金不足，停止開倉")
-                break
+            break
 
-            gross_budget = available_cash / remaining_candidates
+        gross_budget = available_cash / remaining_candidates
+        ticker = sig['ticker']
+        book = sig.get('book') or classify_book(ticker)
+        if book == 'core':
+            risk_mult = tiered_for_sizing.get('core_rotation_boost', 1.0)
+        else:
+            risk_mult = tiered_for_sizing.get('sat_rotation_boost', 1.0)
+        adjusted_budget = gross_budget * risk_mult
+        if verbose and adjusted_budget < gross_budget * 0.1:
+            print(
+                f"   📉 [v9 Tiered] {ticker} ({book}) 因高波動預測大幅降倉 "
+                f"(scale={risk_mult:.2f})"
+            )
 
-            # ===== v9: 選股後買滿；高波動時僅透過 rotation 輪動 =====
-            ticker = sig['ticker']
-            book = classify_book(ticker)
-            if book == 'core':
-                risk_mult = tiered_for_sizing.get('core_rotation_boost', 1.0)
-            else:
-                risk_mult = tiered_for_sizing.get('sat_rotation_boost', 1.0)
-            adjusted_budget = gross_budget * risk_mult
-            if adjusted_budget < gross_budget * 0.1:
-                print(f"   📉 [v9 Tiered] {ticker} ({book}) 因高波動預測大幅降倉 (scale={risk_mult:.2f})")
+        trade_amount = adjusted_budget / (1 + BUY_COST_RATE + SLIPPAGE)
+        shares = int(trade_amount / entry_price)
+        if shares <= 0:
+            if verbose:
+                print(f"   💵 資金不足 {ticker}: 無法在保留本金 10% + tiered scale 後買進")
+            continue
 
-            trade_amount = adjusted_budget / (1 + buy_cost_rate + slippage)
-            shares = int(trade_amount / entry_price)
-            if shares <= 0:
-                print(f"   💵 資金不足 {sig['ticker']}: 無法在保留本金 10% + tiered scale 後買進")
-                continue
+        actual_trade_amount = shares * entry_price
+        buy_cost = actual_trade_amount * (BUY_COST_RATE + SLIPPAGE)
+        if data['capital'] - actual_trade_amount - buy_cost < reserve_cash:
+            if verbose:
+                print(f"   💵 資金不足 {ticker}: 保留本金 10% 後不開倉")
+            continue
 
-            actual_trade_amount = shares * entry_price
-            buy_cost = actual_trade_amount * (buy_cost_rate + slippage)
-            if data['capital'] - actual_trade_amount - buy_cost < reserve_cash:
-                print(f"   💵 資金不足 {sig['ticker']}: 保留本金 10% 後不開倉")
-                continue
-
-            data['capital'] -= (actual_trade_amount + buy_cost)
-            data['positions'][ticker] = {
-                'entry': entry_price,
-                'tp': sig['tp'],
-                'sl': sig['sl'],
-                'entry_date': today,
-                'shares': shares,
-                'day_count': 0,
-                'max_hold_days': sig.get('max_hold_days', max_hold),
-                'book': book,
-                'tiered_scale_applied': round(risk_mult, 4),  # 記錄本次套用的 scale
-            }
-            opened += 1
+        data['capital'] -= (actual_trade_amount + buy_cost)
+        data['positions'][ticker] = {
+            'entry': entry_price,
+            'tp': sig['tp'],
+            'sl': sig['sl'],
+            'entry_date': day,
+            'shares': shares,
+            'day_count': 0,
+            'max_hold_days': sig.get('max_hold_days', MAX_HOLD_DAYS),
+            'book': book,
+            'tiered_scale_applied': round(risk_mult, 4),
+        }
+        opened += 1
+        if verbose:
             emoji = '🟢' if book == 'core' else '🔵'
             scale_note = f" (tiered x{risk_mult:.2f})" if risk_mult < 0.95 else ""
             print(
                 f"   {emoji} 開倉[{book}] {ticker} @ {entry_price:.1f} × {shares:,.0f} "
                 f"(投入 {actual_trade_amount:,.0f}{scale_note}, TP {sig['tp']:.1f} / SL {sig['sl']:.1f})"
             )
-        if opened:
-            print(f"   ✅ 今日開倉 {opened} 檔 (v9 tiered scaling 已套用)")
-    else:
-        print(f"   📋 今日無信號")
 
-    # 4. 計算今日總權益（v9: 同時計算 Core / Satellite / Merged）
+    if verbose and opened:
+        print(f"   ✅ 今日開倉 {opened} 檔 (v9 tiered scaling 已套用)")
+    return opened
+
+
+def _finalize_day_equity(data, day, bars, to_close):
+    prices = {ticker: bar['close'] for ticker, bar in bars.items() if bar.get('close') is not None}
+    for ticker, pos in data['positions'].items():
+        if ticker not in prices:
+            prices[ticker] = pos['entry']
+
     core_eq, sat_eq, total_equity = compute_split_equity(data, prices, data['initial_capital'])
-
     data['equity_curve'].append({
-        'date': today,
+        'date': day,
         'equity': round(total_equity, 0),
         'capital': round(data['capital'], 0),
         'n_positions': len(data['positions']),
         'n_closed_today': len(to_close),
     })
-    data['core_equity_curve'].append({'date': today, 'equity': round(core_eq, 0)})
-    data['sat_equity_curve'].append({'date': today, 'equity': round(sat_eq, 0)})
+    data['core_equity_curve'].append({'date': day, 'equity': round(core_eq, 0)})
+    data['sat_equity_curve'].append({'date': day, 'equity': round(sat_eq, 0)})
 
-    # v9 Option1: risk_adjusted_equity_curve (對比「未套用 tiered」 vs 「套用後」)
     try:
         if 'risk_adjusted_equity_curve' not in data:
             data['risk_adjusted_equity_curve'] = []
         last_scale = data.get('last_tiered', {}).get('overall', 1.0)
-        # Proxy: 假設 70% 是 Sat，調整後權益較低（de-levered）
         adj = total_equity * (0.3 + 0.7 * last_scale)
-        data['risk_adjusted_equity_curve'].append({'date': today, 'equity': round(adj, 0)})
+        data['risk_adjusted_equity_curve'].append({'date': day, 'equity': round(adj, 0)})
     except Exception:
         pass
 
-    # v9: 計算 tiered scales 並存檔（overlay）
     try:
-        pvt = PortfolioVolatilityTarget(VolTargetConfig(target_ann_vol=TARGET_ANN_VOL_DEFAULT))
-        fvol = pvt.forecast_portfolio_ann_vol(
-            pd.Series([p['equity'] for p in data['core_equity_curve'][-60:]]),
-            pd.Series([p['equity'] for p in data['sat_equity_curve'][-60:]]),
-            pd.Series([p['equity'] for p in data['equity_curve'][-60:]]),
-        )
-        scales = pvt.tiered_scale_factors(fvol)
-        data['last_tiered'] = scales
-        print(
-            f"   📐 Rotation | core={scales.get('core_rotation_boost', 1.0):.2f} "
-            f"sat={scales.get('sat_rotation_boost', 1.0):.2f} (fvol={fvol*100:.1f}%, target={TARGET_ANN_VOL_DEFAULT*100:.0f}%)"
-        )
-    except Exception as _e:
+        pvt = _make_v3_pvt(data)
+        ec, es, em = _vol_forecast_inputs(data, day)
+        fvol = pvt.forecast_portfolio_ann_vol(ec, es, em)
+        data['last_tiered'] = pvt.tiered_scale_factors(fvol)
+    except Exception:
         data['last_tiered'] = {}
 
-    total_return = (total_equity / data['initial_capital'] - 1) * 100
-    print(f"\n   💰 總權益: {total_equity:,.0f} ({total_return:+.1f}%)  [Core {core_eq:,.0f} / Sat {sat_eq:,.0f}]")
-    print(f"   📈 已完成交易: {len(data['closed_trades'])} 筆")
+    return core_eq, sat_eq, total_equity
 
 
-BUY_COST_RATE = 0.001425
-SELL_COST_RATE = 0.004425
-SLIPPAGE = 0.001
-MAX_HOLD_DAYS = 20
-RESERVE_RATIO = 0.10
-TOP_K = 7
+def _process_trading_day(data, day, bars, signals, verbose=True):
+    tiered_for_sizing = _compute_tiered_for_sizing(data, day)
+    if verbose:
+        print(
+            f"   📐 [v9] regime={tiered_for_sizing.get('vol_regime', 'normal')} "
+            f"core_rot={tiered_for_sizing.get('core_rotation_boost', 1.0):.2f} "
+            f"sat_rot={tiered_for_sizing.get('sat_rotation_boost', 1.0):.2f} "
+            f"cooling={int(data.get('cooling_days_left', 0))}d"
+        )
+
+    to_close = _close_positions(data, day, bars, verbose=verbose)
+    _apply_rotation_trims(data, bars, tiered_for_sizing, verbose=verbose)
+    _open_positions(data, day, bars, signals, tiered_for_sizing, verbose=verbose)
+    core_eq, sat_eq, total_equity = _finalize_day_equity(data, day, bars, to_close)
+
+    if verbose:
+        scales = data.get('last_tiered', {})
+        fvol = scales.get('forecast_ann_vol', data.get('last_fvol', 0) or 0)
+        print(
+            f"   📐 Rotation | core={scales.get('core_rotation_boost', 1.0):.2f} "
+            f"sat={scales.get('sat_rotation_boost', 1.0):.2f} "
+            f"(fvol={fvol*100:.1f}%, target={TARGET_ANN_VOL_DEFAULT*100:.0f}%)"
+        )
+        total_return = (total_equity / data['initial_capital'] - 1) * 100
+        print(
+            f"\n   💰 總權益: {total_equity:,.0f} ({total_return:+.1f}%)  "
+            f"[Core {core_eq:,.0f} / Sat {sat_eq:,.0f}]"
+        )
+        print(f"   📈 已完成交易: {len(data['closed_trades'])} 筆")
+
+    return total_equity
 
 
 def _latest_artifact(pattern: str) -> Optional[str]:
@@ -643,15 +722,54 @@ def _download_historical_bars(tickers: list, start_date: str, end_date: str) -> 
 
     bars = {}
     tw_map = {t: f"{t}.TW" for t in tickers}
-    tw_df = yf.download(list(tw_map.values()), start=start_dt.isoformat(), end=end_dt.isoformat(), progress=False)
+    tw_df = yf.download(
+        list(tw_map.values()), start=start_dt.isoformat(), end=end_dt.isoformat(),
+        progress=False, auto_adjust=False, threads=True,
+    )
     bars.update(parse_bars(tw_df, tw_map))
 
     missing = [t for t in tickers if t not in bars]
     if missing:
         two_map = {t: f"{t}.TWO" for t in missing}
-        two_df = yf.download(list(two_map.values()), start=start_dt.isoformat(), end=end_dt.isoformat(), progress=False)
+        two_df = yf.download(
+            list(two_map.values()), start=start_dt.isoformat(), end=end_dt.isoformat(),
+            progress=False, auto_adjust=False, threads=True,
+        )
         bars.update(parse_bars(two_df, two_map))
     return bars
+
+
+def _seed_replay_equity_warmup(data: dict, start_date: str,
+                               equity_path: Optional[str] = None) -> None:
+    """Seed 60-day equity warmup from backtest so vol forecast matches event_backtest."""
+    equity_path = equity_path or _latest_artifact('artifacts/equity_*.csv')
+    if not equity_path or not os.path.exists(equity_path):
+        return
+    try:
+        df = pd.read_csv(equity_path, parse_dates=['Date'])
+        df = df[df['Date'] < pd.Timestamp(start_date)].sort_values('Date')
+        if len(df) < 5:
+            return
+        warmup = df.tail(60)
+        anchor = float(warmup.iloc[-1]['Equity'])
+        if anchor <= 0:
+            return
+        scale = data['initial_capital'] / anchor
+        for _, row in warmup.iterrows():
+            scaled = float(row['Equity']) * scale
+            day = row['Date'].strftime('%Y-%m-%d')
+            data['equity_curve'].append({
+                'date': day,
+                'equity': round(scaled, 0),
+                'capital': round(scaled, 0),
+                'n_positions': 0,
+                'n_closed_today': 0,
+            })
+            data['core_equity_curve'].append({'date': day, 'equity': round(scaled * 0.25, 0)})
+            data['sat_equity_curve'].append({'date': day, 'equity': round(scaled * 0.75, 0)})
+        print(f"   📈 權益暖機: {len(warmup)} 日 (來自 {os.path.basename(equity_path)})")
+    except Exception as exc:
+        print(f"   ⚠️ 權益暖機失敗: {exc}")
 
 
 def _trading_days_from_bars(hist_bars: dict, start_date: str, end_date: str) -> list:
@@ -673,189 +791,12 @@ def _day_bars(hist_bars: dict, day: str, tickers: set) -> dict:
 
 
 def _process_replay_day(data: dict, day: str, bars: dict, entry_signals: list) -> None:
-    reserve_cash = data['initial_capital'] * RESERVE_RATIO
-    to_close = []
-
-    tiered_for_sizing = {
-        "overall": 1.0, "core_trade_scale": 1.0, "sat_trade_scale": 1.0,
-        "core_rotation_boost": 1.0, "sat_rotation_boost": 1.0,
-        "vol_regime": 'normal', "rotate_core_profits_to_sat": 0.0,
-    }
-    try:
-        pvt = PortfolioVolatilityTarget(VolTargetConfig(target_ann_vol=TARGET_ANN_VOL_DEFAULT))
-        pvt._prev_forecast_vol = data.get('last_fvol')
-        fvol_preview = pvt.forecast_portfolio_ann_vol(
-            pd.Series([p['equity'] for p in data.get('core_equity_curve', [])[-60:]]),
-            pd.Series([p['equity'] for p in data.get('sat_equity_curve', [])[-60:]]),
-            pd.Series([p['equity'] for p in data.get('equity_curve', [])[-60:]]),
-        )
-        tiered_for_sizing = pvt.tiered_scale_factors(fvol_preview)
-        data['last_fvol'] = fvol_preview
-    except Exception:
-        pass
-
-    for ticker, pos in data['positions'].items():
-        pos['day_count'] = pos.get('day_count', 0) + 1
-        bar = bars.get(ticker)
-        if not bar:
-            continue
-
-        reason = None
-        exit_price = bar['close']
-        pos_max_hold = pos.get('max_hold_days', MAX_HOLD_DAYS)
-        if bar['low'] <= pos['sl']:
-            reason = 'SL'
-            exit_price = bar['open'] if bar['open'] < pos['sl'] else pos['sl']
-        elif bar['high'] >= pos['tp']:
-            reason = 'TP'
-            exit_price = bar['open'] if bar['open'] > pos['tp'] else pos['tp']
-        elif pos['day_count'] >= pos_max_hold:
-            reason = 'TIME'
-            exit_price = bar['close']
-
-        if reason:
-            sell_cost = exit_price * pos['shares'] * SELL_COST_RATE
-            slippage_cost = exit_price * pos['shares'] * SLIPPAGE
-            proceeds = exit_price * pos['shares'] - sell_cost - slippage_cost
-            cost_basis = pos['entry'] * pos['shares'] * (1 + BUY_COST_RATE + SLIPPAGE)
-            pnl = proceeds - cost_basis
-            pnl_pct = (exit_price / pos['entry'] - 1) * 100
-            data['capital'] += proceeds
-            book = pos.get('book', classify_book(ticker))
-            data['closed_trades'].append({
-                'ticker': ticker,
-                'entry': pos['entry'],
-                'exit': exit_price,
-                'shares': pos['shares'],
-                'pnl': round(pnl, 0),
-                'pnl_pct': round(pnl_pct, 2),
-                'reason': reason,
-                'entry_date': pos['entry_date'],
-                'exit_date': day,
-                'days_held': pos['day_count'],
-                'book': book,
-            })
-            to_close.append(ticker)
-
-    for ticker in to_close:
-        del data['positions'][ticker]
-
-    if tiered_for_sizing.get('rotate_core_profits_to_sat', 0) >= 1.0:
-        trim_frac = 0.35
-        for ticker, pos in list(data['positions'].items()):
-            if pos.get('book', classify_book(ticker)) != 'core':
-                continue
-            bar = bars.get(ticker)
-            if not bar:
-                continue
-            pnl_pct = (bar['close'] / pos['entry'] - 1) * 100
-            if pnl_pct < 3.0:
-                continue
-            shares_sell = int(pos['shares'] * trim_frac)
-            if shares_sell <= 0:
-                continue
-            exit_price = bar['close']
-            sell_cost = exit_price * shares_sell * SELL_COST_RATE
-            slippage_cost = exit_price * shares_sell * SLIPPAGE
-            proceeds = exit_price * shares_sell - sell_cost - slippage_cost
-            data['capital'] += proceeds
-            pos['shares'] -= shares_sell
-
-    if entry_signals:
-        signal_tickers = [s['ticker'] for s in entry_signals]
-        data['daily_signals'].append({'date': day, 'tickers': signal_tickers})
-        max_new = TOP_K - len(data['positions'])
-        candidates = []
-        for sig in entry_signals:
-            if len(candidates) >= max_new:
-                break
-            ticker = sig['ticker']
-            if ticker in data['positions']:
-                continue
-            bar = bars.get(ticker)
-            if not bar:
-                continue
-            limit_price = sig['entry']
-            if bar['low'] > limit_price:
-                continue
-            entry_price = min(bar['open'], limit_price) if bar['open'] <= limit_price else limit_price
-            candidates.append((sig, entry_price))
-
-        for idx, (sig, entry_price) in enumerate(candidates):
-            available_cash = max(data['capital'] - reserve_cash, 0)
-            remaining_candidates = len(candidates) - idx
-            if available_cash <= 0:
-                break
-
-            gross_budget = available_cash / remaining_candidates
-            ticker = sig['ticker']
-            book = sig.get('book') or classify_book(ticker)
-            if book == 'core':
-                risk_mult = tiered_for_sizing.get('core_rotation_boost', 1.0)
-            else:
-                risk_mult = tiered_for_sizing.get('sat_rotation_boost', 1.0)
-            adjusted_budget = gross_budget * risk_mult
-            trade_amount = adjusted_budget / (1 + BUY_COST_RATE + SLIPPAGE)
-            shares = int(trade_amount / entry_price)
-            if shares <= 0:
-                continue
-            actual_trade_amount = shares * entry_price
-            buy_cost = actual_trade_amount * (BUY_COST_RATE + SLIPPAGE)
-            if data['capital'] - actual_trade_amount - buy_cost < reserve_cash:
-                continue
-
-            data['capital'] -= (actual_trade_amount + buy_cost)
-            data['positions'][ticker] = {
-                'entry': entry_price,
-                'tp': sig['tp'],
-                'sl': sig['sl'],
-                'entry_date': day,
-                'shares': shares,
-                'day_count': 0,
-                'max_hold_days': sig.get('max_hold_days', MAX_HOLD_DAYS),
-                'book': book,
-                'rotation_boost_applied': round(risk_mult, 4),
-            }
-
-    prices = {t: bars[t]['close'] for t in data['positions'] if t in bars}
-    for ticker, pos in data['positions'].items():
-        if ticker not in prices:
-            prices[ticker] = pos['entry']
-
-    core_eq, sat_eq, total_equity = compute_split_equity(data, prices, data['initial_capital'])
-    data['equity_curve'].append({
-        'date': day,
-        'equity': round(total_equity, 0),
-        'capital': round(data['capital'], 0),
-        'n_positions': len(data['positions']),
-        'n_closed_today': len(to_close),
-    })
-    data['core_equity_curve'].append({'date': day, 'equity': round(core_eq, 0)})
-    data['sat_equity_curve'].append({'date': day, 'equity': round(sat_eq, 0)})
-
-    try:
-        if 'risk_adjusted_equity_curve' not in data:
-            data['risk_adjusted_equity_curve'] = []
-        last_scale = data.get('last_tiered', {}).get('overall', 1.0)
-        adj = total_equity * (0.3 + 0.7 * last_scale)
-        data['risk_adjusted_equity_curve'].append({'date': day, 'equity': round(adj, 0)})
-    except Exception:
-        pass
-
-    try:
-        pvt = PortfolioVolatilityTarget(VolTargetConfig(target_ann_vol=TARGET_ANN_VOL_DEFAULT))
-        fvol = pvt.forecast_portfolio_ann_vol(
-            pd.Series([p['equity'] for p in data['core_equity_curve'][-60:]]),
-            pd.Series([p['equity'] for p in data['sat_equity_curve'][-60:]]),
-            pd.Series([p['equity'] for p in data['equity_curve'][-60:]]),
-        )
-        data['last_tiered'] = pvt.tiered_scale_factors(fvol)
-    except Exception:
-        data['last_tiered'] = {}
+    _process_trading_day(data, day, bars, entry_signals or [], verbose=False)
 
 
 def replay_from_backtest(start_date: str, end_date: Optional[str] = None,
-                         trades_path: Optional[str] = None) -> dict:
+                         trades_path: Optional[str] = None,
+                         equity_path: Optional[str] = None) -> dict:
     trades_path = trades_path or _latest_artifact('artifacts/trades_*.csv')
     if not trades_path:
         raise FileNotFoundError('找不到 artifacts/trades_*.csv，請先執行 ai_report.py')
@@ -893,8 +834,16 @@ def replay_from_backtest(start_date: str, end_date: Optional[str] = None,
         'sat_equity_curve': [],
         'last_tiered': {},
         'last_fvol': None,
+        'cooling_days_left': 0,
         'daily_signals': [],
     }
+    _seed_replay_equity_warmup(data, start_date, equity_path)
+    eq_path = equity_path or _latest_artifact('artifacts/equity_*.csv')
+    if eq_path and os.path.exists(eq_path):
+        try:
+            data['_bt_equity_df'] = pd.read_csv(eq_path, parse_dates=['Date'])
+        except Exception:
+            pass
 
     for i, day in enumerate(trading_days):
         active = set(data['positions'].keys())
@@ -907,6 +856,7 @@ def replay_from_backtest(start_date: str, end_date: Optional[str] = None,
             ret = (eq / data['initial_capital'] - 1) * 100
             print(f"   {day}: 權益 {eq:,.0f} ({ret:+.1f}%) | 持倉 {len(data['positions'])} | 已平 {len(data['closed_trades'])}")
 
+    data.pop('_bt_equity_df', None)
     return data
 
 
