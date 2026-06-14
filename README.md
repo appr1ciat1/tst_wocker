@@ -1,11 +1,17 @@
-# TW Stocker v9.0 — AI 量化交易系統（雙策略架構）
+# TW Stocker v9 — Hybrid Tiered Risk Budgeting Framework
 
-中期動量 + 板塊輪動的雙策略系統。v8.5 個股動量穩健底倉 + Sector Rotation v2 板塊資金流追蹤。
-美股前提（SPY/VIX/SOX）→ 板塊資金流選擇 → 板塊內選股。
+v9 在原有雙策略（v8.5 Momentum + Sector Rotation v2）之上，導入 **Portfolio Volatility Targeting（目標年化 8–12%） + Core-Satellite 分層風險預算** 作為最上層 overlay。
 
-> 最新重算：2026-05-26。以下數字已套用日期對齊、eval window 裁切、raw OHLCV tradability mask、`.TW/.TWO` fallback、Arithmetic Sharpe 修正。舊版 README 的高 Sharpe / crisis headline 不應再沿用。
+- **Core**（上限 3–5 檔結構龍頭，例如 2330 TSMC）：較高基礎曝險（建議總曝險 20–30%）、緩和 scale 調整、較寬鬆尾部風險容忍。
+- **Satellite**（其餘由 v8.5 + SR v2 產生的標的）：嚴格受組合波動率目標約束，波動上升時優先大幅 scale down。
+- 每日自動計算 EWMA 預測波動 → Tiered Scaling → 實際套用到新倉 sizing。
+- 所有 Core 選取與 scale 決策寫入 `research/experiment_registry.py` 供審計。
+- 與既有 regime filter（台股 0050/MA + Breadth、美股 SPY/VIX/SOX）完全相容。
 
-**v9 Hybrid Tiered Risk Budgeting（新）**：在維持 v8.5 Momentum + Sector Rotation v2 alpha 的前提下，導入 Portfolio Volatility Targeting（目標年化 8-12%） + Core-Satellite 分層風險預算。Core（3-5 檔結構龍頭，如 2330）給予較高基礎曝險與較緩 scale；Satellite 嚴格受 vol 目標約束。所有 scale 決策與 Core 選取寫入 experiment registry。實盤/ paper 層以 overlay 方式運作，與既有 regime filter 相容。使用 `python paper_trade.py tiered` 及 `paper_tracker.py` 雙 book 追蹤查看即時 scale 建議。
+> 最新更新：2026-06-14（v9 Hybrid Tiered 完整落地）。舊版 README 的高 Sharpe / crisis headline 不應再沿用。
+
+📊 **線上報表**：https://voidful.github.io/tw_stocker/stock_report.html  
+📈 **Paper Trading**：https://voidful.github.io/tw_stocker/paper_trading.html（已內建雙 book 曲線 + Tiered 儀表板 + Risk-Adjusted 對比）
 
 📊 **線上報表**：https://voidful.github.io/tw_stocker/stock_report.html
 📈 **Paper Trading**：https://voidful.github.io/tw_stocker/paper_trading.html
@@ -25,6 +31,51 @@
 | **1200d MDD** | **-16.4%** | -38.0% |
 | **7y 年化參考** | +39.0% | +36.6% |
 | **7y Sharpe 參考** | 1.56 | 1.32 |
+
+---
+
+## v9 Hybrid Tiered Risk Budgeting Framework（核心升級）
+
+在維持原有 alpha 因子（cross-sectional momentum + sector rotation）的前提下，導入組合層級風險預算：
+
+### 1. Portfolio Volatility Targeting Layer
+- 每日使用 EWMA（或可選 GARCH）預測整個組合（Core + Satellite）的 realized/forecast volatility。
+- 目標年化波動率：**8–12%**（預設 10%）。
+- 當預測波動超過目標時，輸出總 scale factor 並動態調整 gross exposure。
+
+### 2. Core-Satellite 分層風險預算
+- **Core**（高信心部位）：少數經客觀多因子篩選的高品質標的（建議 3–5 檔，如 2330、2454 等結構性龍頭）。
+  - 較高基礎曝險（總曝險 20–30%）
+  - 較小衰減係數 + 較高 floor（保護 alpha）
+  - 較寬鬆 ATR TP/SL 或持有上限（可客製）
+- **Satellite**（動能衛星部位）：其餘透過 v8.5 Momentum 與 Sector Rotation v2 產生的標的。
+  - 嚴格受 vol 目標約束
+  - 波動上升時優先且較大幅度 scale down
+
+### 3. Tiered Scaling 與日常運作
+每日流程：
+1. 訊號產生（v8.5 / SR v2）
+2. 標記 Core / Satellite（`strategy/core_holdings.py`）
+3. 合併波動率預測（`strategy/portfolio_vol_target.py`）
+4. Tiered Scaling 計算
+5. 風險檢查 → 實際執行（paper_tracker 會自動套用）
+
+### 4. 實作模組
+- `strategy/core_holdings.py`：多因子篩選 + 名額上限 + 每季更新 + 寫入 registry
+- `strategy/portfolio_vol_target.py`：EWMA 預測 + tiered scale factors + apply_to_positions
+- `strategy/risk_metrics.py`：擴充 `compute_tiered_scales`、`merge_book_equities`、`compute_tiered_risk_summary`
+- `paper_tracker.py` / `paper_trade.py`：雙 book 追蹤、risk_adjusted_equity_curve、tiered CLI
+- `event_backtest.py` / `ai_report.py`：支援 `--hybrid-tiered` 旗標，讓回測也反映 tiered sizing
+
+### 5. Paper Trading 與 CLI
+```bash
+python paper_trade.py tiered                 # 即時查看當前 forecast vol + tiered scales + 建議
+python paper_trade.py core                   # 顯示 Core Holdings 建議篩選結果
+python paper_tracker.py                      # 每日自動更新，同時維護 core/sat equity 與 last_tiered
+python ai_report.py --hybrid-tiered ...      # 回測時啟用 v9 tiered scaling
+```
+
+所有決策都會寫入 `artifacts/experiments.sqlite`，可透過 `python -m research.experiment_registry --latest 20` 審計。
 
 ---
 
@@ -184,12 +235,15 @@ python factor_grid_search.py --mode ablation              # 寫入同一個 expe
 python -m validation.deflated_sharpe --equity artifacts/equity_YYYYMMDD.csv --trials 20
 python -m research.experiment_registry --latest 20
 
-# ── Paper Trading ──
+# ── Paper Trading（v9 重點） ──
 python paper_trade.py signals --enrich
 python paper_trade.py hardstop
-python paper_trade.py tiered          # v9: 計算當前組合 vol target + tiered core/sat scale
-python paper_trade.py core            # v9: 顯示 Core Holdings 建議篩選
-# paper_tracker.py 每日自動維護 core/sat 雙 book equity 與 last_tiered
+python paper_trade.py tiered          # v9: 即時組合 vol forecast + tiered scale 建議 + Core/Sat 調整
+python paper_trade.py core            # v9: Core Holdings 多因子篩選建議
+python paper_tracker.py               # 每日自動追蹤，同時更新雙 book equity_curve 與 risk_adjusted 曲線
+
+# 回測時啟用 v9 tiered scaling（會改變 position sizing 與 equity 曲線）
+python ai_report.py --hybrid-tiered --days 400 --top-k 5
 ```
 
 ## 研究平台化工具
