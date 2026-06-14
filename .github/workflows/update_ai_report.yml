@@ -58,7 +58,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run AI Quant Pipeline v9 (Hybrid Tiered)
+      - name: Run AI Quant Pipeline v9 (V3 production params)
         if: github.event.schedule != '0 10 1 * *'
         run: |
           python ai_report.py \

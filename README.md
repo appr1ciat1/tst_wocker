@@ -14,7 +14,7 @@ v9 在原有雙策略（v8.5 Momentum + Sector Rotation v2）之上，導入 **P
 - [stock_report.html](https://appr1ciat1.github.io/tw_stocker/stock_report.html) — v9 說明區塊 + hybrid tiered 回測資訊
 - [paper_trading.html](https://appr1ciat1.github.io/tw_stocker/paper_trading.html) — 雙 book 曲線、Tiered 儀表板、Risk-Adjusted 對比曲線
 
-> v9 生產參數：`rotation_trigger=22%`、`crisis_vol=30%`、冷卻 Sat 2.1× × 16 日、壓力區 `stress_sat_floor=0.85`（不主動賣 Sat）。
+> **V3 最佳參數組**（`full_sweep` 驗證）：`trigger=22%` / `crisis=30%` / `stress_sat_floor=0.85` / `stress_core_ceiling=1.50` / 冷卻 Sat **2.1× × 16 日** / `core_alpha_trim=85%` / 不主動賣 Sat（`sat_alpha_trim=0`）。回測 ann **+79%**、Sharpe **2.46**、MDD **-18.8%**。
 
 ---
 

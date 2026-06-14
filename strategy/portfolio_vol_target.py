@@ -51,6 +51,60 @@ COOLING_CORE_BOOST_DEFAULT = 0.50
 CORE_ALPHA_TRIM_FRAC_DEFAULT = 0.85
 CORE_ALPHA_TRIM_MIN_PNL_DEFAULT = 0.005
 
+# V3 最佳參數組（full_sweep Stage 3 + Stage 4 驗證：ann +79% / Sharpe 2.46 / MDD -18.8%）
+V3_PRODUCTION_LABEL = 'V3 最佳參數組'
+
+
+def v3_production_kwargs(rotation_trigger=None, crisis_vol=None):
+    """EventDrivenBacktester tiered kwargs for validated V3 production defaults."""
+    return {
+        'rotation_trigger_vol': (
+            rotation_trigger if rotation_trigger is not None else ROTATION_TRIGGER_VOL
+        ),
+        'crisis_vol': crisis_vol if crisis_vol is not None else CRISIS_VOL,
+        'stress_sat_floor': STRESS_SAT_FLOOR_DEFAULT,
+        'stress_core_ceiling': STRESS_CORE_CEILING_DEFAULT,
+        'cooling_sat_boost': COOLING_SAT_BOOST_DEFAULT,
+        'cooling_core_boost': COOLING_CORE_BOOST_DEFAULT,
+        'sat_alpha_trim_frac': SAT_ALPHA_TRIM_FRAC_DEFAULT,
+        'sat_alpha_trim_min_pnl': SAT_ALPHA_TRIM_MIN_PNL_DEFAULT,
+        'core_alpha_trim_frac': CORE_ALPHA_TRIM_FRAC_DEFAULT,
+        'core_alpha_trim_min_pnl': CORE_ALPHA_TRIM_MIN_PNL_DEFAULT,
+        'cooling_days': COOLING_DAYS_DEFAULT,
+    }
+
+
+def build_v3_production_backtester(args):
+    """Construct EventDrivenBacktester identical to run_full_sweep / compare_v85_v9."""
+    from strategy.event_backtest import EventDrivenBacktester
+
+    return EventDrivenBacktester(
+        tp_sl_mode='atr',
+        tp_atr_mult=args.tp_atr,
+        sl_atr_mult=args.sl_atr,
+        max_hold_days=args.hold_days,
+        initial_capital=args.capital,
+        position_size=args.position_size,
+        regime_filter=True,
+        regime_graduated=True,
+        regime_floor=args.regime_floor,
+        gap_filter_atr=args.gap_filter,
+        breadth_regime=True,
+        hybrid_tiered=True,
+        core_tickers=['2330', '2454', '2308', '2317', '3008'],
+        target_ann_vol=0.15,
+        buy_cost=getattr(args, 'buy_cost', 0.001425),
+        sell_cost=getattr(args, 'sell_cost', 0.004425),
+        corr_filter=0.0,
+        gap_aware_sizing=False,
+        slippage=0.0,
+        **v3_production_kwargs(
+            getattr(args, 'rotation_trigger', None),
+            getattr(args, 'crisis_vol', None),
+        ),
+    )
+
+
 # 預設 tiered 參數（可 override）
 # 當 forecast_vol > target 時的衰減敏感度：sat > core
 DEFAULT_CORE_DECAY = 0.35

@@ -45,11 +45,17 @@ from strategy.risk_metrics import compute_risk_metrics, format_metrics_summary
 # v9 Hybrid Tiered (optional import for future overlay integration in reports)
 try:
     from strategy.core_holdings import CoreHoldingsManager
-    from strategy.portfolio_vol_target import PortfolioVolatilityTarget
+    from strategy.portfolio_vol_target import (
+        PortfolioVolatilityTarget,
+        V3_PRODUCTION_LABEL,
+        build_v3_production_backtester,
+    )
     from strategy.risk_metrics import compute_tiered_risk_summary
     HAS_TIERED = True
 except Exception:
     HAS_TIERED = False
+    V3_PRODUCTION_LABEL = 'v9 Hybrid Tiered'
+    build_v3_production_backtester = None
 from strategy.benchmark import fetch_benchmark, equal_weight_benchmark, compute_excess_return
 from strategy.institutional_flow import build_inst_flow_df, get_inst_flow_for_signals, fetch_inst_rankings
 from strategy.news_sentiment import get_news_sentiment_for_signals
@@ -1657,8 +1663,8 @@ def parse_args():
         help='獲利保護觸發門檻 (預設: 0=停用, 0.03=+3%%後 SL 移至成本價)'
     )
     parser.add_argument(
-        '--slippage', type=float, default=0.001,
-        help='滑價模型 (預設: 0.001=10bps; 0=停用)'
+        '--slippage', type=float, default=0.0,
+        help='滑價模型 (預設: 0=與 V3 sweep 一致; 0.001=10bps)'
     )
     parser.add_argument(
         '--vol-parity', action='store_true',
@@ -1731,8 +1737,8 @@ def parse_args():
 
     # 風控竟日卡（預設停用，非動量策略可開啟）
     parser.add_argument(
-        '--dd-pause-pct', type=float, default=1.0,
-        help='權益回撤暫停門檻 (預設 1.0 = 停用; 建議實盤設 0.15)'
+        '--dd-pause-pct', type=float, default=0.10,
+        help='權益回撤暫停門檻 (預設 0.10，與 V3 sweep / event_backtest 一致)'
     )
     parser.add_argument(
         '--dd-pause-days', type=int, default=5,
@@ -1751,8 +1757,8 @@ def parse_args():
         help='單一板塊最大持倉比例 (預設 0.75 = 75%%; 1.0 = 停用)'
     )
     parser.add_argument(
-        '--corr-filter', type=float, default=0.8,
-        help='相關性過濾門檻 (預設 0.8; 0 = 停用; 去除近 20 日相關>門檻的重複持倉)'
+        '--corr-filter', type=float, default=0.0,
+        help='相關性過濾門檻 (預設 0=與 V3 sweep 一致; 0.8=去重複持倉)'
     )
     parser.add_argument(
         '--max-heat', type=float, default=1.0,
@@ -1812,8 +1818,8 @@ def parse_args():
         help='啟用趨勢品質：slope + 均線排列 + 過熱抑制'
     )
     parser.add_argument(
-        '--gap-aware-sizing', action='store_true', default=True,
-        help='啟用 Gap-aware sizing：跳空越大，進場倉位越小'
+        '--gap-aware-sizing', action='store_true', default=False,
+        help='啟用 Gap-aware sizing：跳空越大，進場倉位越小 (預設關閉，與 V3 sweep 一致)'
     )
     parser.add_argument(
         '--dynamic-sector-cap', action='store_true',
@@ -1928,7 +1934,7 @@ def main():
     trailing_str = f" +Trailing({args.trailing_atr}×ATR)" if args.trailing else ""
 
     print("=" * 60)
-    tiered_str = "ON (v9)" if args.hybrid_tiered else "OFF (v8.5)"
+    tiered_str = f"ON ({V3_PRODUCTION_LABEL})" if args.hybrid_tiered else "OFF (v8.5)"
     print(f"🎯 AI 台股量化交易系統 — Hybrid Tiered: {tiered_str}")
     print("=" * 60)
     print(f"   股池: {mode_str}")
@@ -1993,63 +1999,63 @@ def main():
     )
 
     # Phase 4: 事件驅動回測
-    backtester = EventDrivenBacktester(
-        tp_pct=args.tp,
-        sl_pct=args.sl,
-        max_hold_days=args.hold_days,
-        initial_capital=args.capital,
-        position_size=args.position_size,
-        tp_sl_mode=args.tp_sl_mode,
-        tp_atr_mult=args.tp_atr,
-        sl_atr_mult=args.sl_atr,
-        trailing_stop=args.trailing,
-        trailing_atr_mult=args.trailing_atr,
-        regime_filter=args.regime_filter,
-        regime_graduated=args.regime_graduated,
-        regime_floor=args.regime_floor,
-        gap_filter_atr=args.gap_filter,
-        volume_confirm=args.volume_confirm,
-        blacklist_lookback=args.blacklist,
-        breakeven_pct=args.breakeven,
-        slippage=args.slippage,
-        vol_parity=args.vol_parity,
-        mean_reversion=args.mean_reversion,
-        dynamic_risk=args.dynamic_risk,
-        futures_hedge=args.futures_hedge,
-        dd_pause_pct=args.dd_pause_pct,
-        dd_pause_days=args.dd_pause_days,
-        consec_loss_limit=args.consec_loss_limit,
-        consec_loss_pause=args.consec_loss_pause,
-        sector_max_pct=args.sector_max_pct,
-        corr_filter=args.corr_filter,
-        max_portfolio_heat=args.max_heat,
-        rank_weighted=args.rank_weight,
-        regime_deleverage=args.regime_delev,
-        confidence_k=args.confidence_k,
-        mid_hold_review=args.mid_hold_review,
-        breadth_regime=args.breadth_regime,
-        candidate_breadth=args.candidate_breadth,
-        theme_breadth=args.theme_breadth,
-        dynamic_sector_cap=args.dynamic_sector_cap,
-        gap_aware_sizing=args.gap_aware_sizing,
-        cluster_penalty=args.cluster_penalty,
-        # v9 Hybrid Tiered
-        hybrid_tiered=args.hybrid_tiered,
-        core_tickers=['2330', '2454', '2308', '2317', '3008'],
-        target_ann_vol=0.15,
-        rotation_trigger_vol=args.rotation_trigger,
-        crisis_vol=args.crisis_vol,
-        macro_regime=args.macro_regime,
-        batch_entry=args.batch_entry,
-        dynamic_topk=args.dynamic_topk,
-        dynamic_gap_filter=args.dynamic_gap_filter,
-        dynamic_corr_filter=args.dynamic_corr_filter,
-        sector_flow_tilt=args.sector_flow_tilt,
-        tilt_strength=args.tilt_strength,
-        tilt_windows=[int(w) for w in args.tilt_windows.split(',')],
-        buy_cost=args.buy_cost,
-        sell_cost=args.sell_cost,
-    )
+    if args.hybrid_tiered and build_v3_production_backtester is not None:
+        backtester = build_v3_production_backtester(args)
+    else:
+        backtester = EventDrivenBacktester(
+            tp_pct=args.tp,
+            sl_pct=args.sl,
+            max_hold_days=args.hold_days,
+            initial_capital=args.capital,
+            position_size=args.position_size,
+            tp_sl_mode=args.tp_sl_mode,
+            tp_atr_mult=args.tp_atr,
+            sl_atr_mult=args.sl_atr,
+            trailing_stop=args.trailing,
+            trailing_atr_mult=args.trailing_atr,
+            regime_filter=args.regime_filter,
+            regime_graduated=args.regime_graduated,
+            regime_floor=args.regime_floor,
+            gap_filter_atr=args.gap_filter,
+            volume_confirm=args.volume_confirm,
+            blacklist_lookback=args.blacklist,
+            breakeven_pct=args.breakeven,
+            slippage=args.slippage,
+            vol_parity=args.vol_parity,
+            mean_reversion=args.mean_reversion,
+            dynamic_risk=args.dynamic_risk,
+            futures_hedge=args.futures_hedge,
+            dd_pause_pct=args.dd_pause_pct,
+            dd_pause_days=args.dd_pause_days,
+            consec_loss_limit=args.consec_loss_limit,
+            consec_loss_pause=args.consec_loss_pause,
+            sector_max_pct=args.sector_max_pct,
+            corr_filter=args.corr_filter,
+            max_portfolio_heat=args.max_heat,
+            rank_weighted=args.rank_weight,
+            regime_deleverage=args.regime_delev,
+            confidence_k=args.confidence_k,
+            mid_hold_review=args.mid_hold_review,
+            breadth_regime=args.breadth_regime,
+            candidate_breadth=args.candidate_breadth,
+            theme_breadth=args.theme_breadth,
+            dynamic_sector_cap=args.dynamic_sector_cap,
+            gap_aware_sizing=args.gap_aware_sizing,
+            cluster_penalty=args.cluster_penalty,
+            hybrid_tiered=False,
+            rotation_trigger_vol=args.rotation_trigger,
+            crisis_vol=args.crisis_vol,
+            macro_regime=args.macro_regime,
+            batch_entry=args.batch_entry,
+            dynamic_topk=args.dynamic_topk,
+            dynamic_gap_filter=args.dynamic_gap_filter,
+            dynamic_corr_filter=args.dynamic_corr_filter,
+            sector_flow_tilt=args.sector_flow_tilt,
+            tilt_strength=args.tilt_strength,
+            tilt_windows=[int(w) for w in args.tilt_windows.split(',')],
+            buy_cost=args.buy_cost,
+            sell_cost=args.sell_cost,
+        )
     trades_df, equity_df = backtester.run(
         total_score, close_df, open_df, high_df, low_df, ma_60,
         top_k=args.top_k,
