@@ -5,6 +5,8 @@
 
 > 最新重算：2026-05-26。以下數字已套用日期對齊、eval window 裁切、raw OHLCV tradability mask、`.TW/.TWO` fallback、Arithmetic Sharpe 修正。舊版 README 的高 Sharpe / crisis headline 不應再沿用。
 
+**v9 Hybrid Tiered Risk Budgeting（新）**：在維持 v8.5 Momentum + Sector Rotation v2 alpha 的前提下，導入 Portfolio Volatility Targeting（目標年化 8-12%） + Core-Satellite 分層風險預算。Core（3-5 檔結構龍頭，如 2330）給予較高基礎曝險與較緩 scale；Satellite 嚴格受 vol 目標約束。所有 scale 決策與 Core 選取寫入 experiment registry。實盤/ paper 層以 overlay 方式運作，與既有 regime filter 相容。使用 `python paper_trade.py tiered` 及 `paper_tracker.py` 雙 book 追蹤查看即時 scale 建議。
+
 📊 **線上報表**：https://voidful.github.io/tw_stocker/stock_report.html
 📈 **Paper Trading**：https://voidful.github.io/tw_stocker/paper_trading.html
 
@@ -185,6 +187,9 @@ python -m research.experiment_registry --latest 20
 # ── Paper Trading ──
 python paper_trade.py signals --enrich
 python paper_trade.py hardstop
+python paper_trade.py tiered          # v9: 計算當前組合 vol target + tiered core/sat scale
+python paper_trade.py core            # v9: 顯示 Core Holdings 建議篩選
+# paper_tracker.py 每日自動維護 core/sat 雙 book equity 與 last_tiered
 ```
 
 ## 研究平台化工具
@@ -212,7 +217,8 @@ tw_stocker/
 ├── walk_forward_nested.py        # Nested train→select→test research gate
 ├── monte_carlo.py                # Equity-Curve Block Bootstrap (v3)
 ├── sweep.py                      # 季度參數校準 + Telegram 警報
-├── paper_trade.py                # Paper Trading v8 + 月報
+├── paper_trade.py                # Paper Trading v8 + 月報 + v9 tiered CLI
+├── paper_tracker.py              # 每日自動 paper equity 追蹤（雙 book 支援）
 ├── research/
 │   └── experiment_registry.py     # SQLite experiment audit log
 ├── validation/
@@ -226,9 +232,11 @@ tw_stocker/
 │   ├── sector_flow.py            # 板塊資金流分析
 │   ├── institutional_flow.py     # 三大法人籌碼因子
 │   ├── news_sentiment.py         # 新聞情緒因子
-│   ├── risk_metrics.py           # 風險指標計算
+│   ├── risk_metrics.py           # 風險指標計算 + v9 tiered/vol helpers
+│   ├── core_holdings.py          # 🆕 v9 Core 多因子篩選（3-5 檔高信心）
+│   ├── portfolio_vol_target.py   # 🆕 v9 Portfolio Vol Targeting + Tiered Core/Sat
 │   └── benchmark.py              # Benchmark (0050 / EW)
-├── artifacts/                    # 每日 CSV + 月報
+├── artifacts/                    # 每日 CSV + 月報 + experiments.sqlite
 ├── .github/workflows/
 │   └── update_ai_report.yml      # 每日自動執行
 └── stock_report.html             # 完整交易報表

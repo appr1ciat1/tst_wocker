@@ -8,10 +8,17 @@
 - Win Rate / Profit Factor
 - Worst Month / Best Month
 - Turnover Rate
+
+v9 Hybrid Tiered 擴充：
+- Tiered scaling helpers (core vs satellite)
+- Merged book equity + portfolio vol forecast 相關指標
+- compute_tired_risk_summary
 """
 
 import pandas as pd
 import numpy as np
+
+from typing import Dict, Optional, Tuple, Any
 
 
 def compute_risk_metrics(equity_df, trades_df, initial_capital=1_000_000, risk_free_rate=0.0):
@@ -186,4 +193,186 @@ def format_metrics_summary(metrics):
         f"  平均持有天數:   {metrics['avg_days_held']:.1f}",
         "═" * 50,
     ]
+    return "\n".join(lines)
+
+
+# ============================================================
+# v9 Hybrid Tiered Risk Budgeting 擴充函數
+# ============================================================
+
+def compute_portfolio_vol_forecast(
+    equity_core: Optional[pd.DataFrame | pd.Series] = None,
+    equity_sat: Optional[pd.DataFrame | pd.Series] = None,
+    merged_equity: Optional[pd.DataFrame | pd.Series] = None,
+    lookback: int = 60,
+    ewma_lambda: float = 0.94,
+) -> Dict[str, float]:
+    """
+    計算組合層級預測波動率（EWMA 為主）。
+    供 Portfolio Volatility Targeting 使用。
+    """
+    def _to_ret(eq):
+        if eq is None:
+            return pd.Series(dtype=float)
+        if isinstance(eq, pd.DataFrame):
+            if "Equity" in eq.columns:
+                s = eq["Equity"]
+            else:
+                s = eq.iloc[:, 0]
+        else:
+            s = eq
+        s = s.sort_index().dropna()
+        return s.pct_change().dropna().tail(lookback)
+
+    if merged_equity is not None:
+        rets = _to_ret(merged_equity)
+    else:
+        rc = _to_ret(equity_core)
+        rs = _to_ret(equity_sat)
+        if len(rc) == 0 and len(rs) == 0:
+            return {"ann_vol": 0.12, "method": "neutral"}
+        # 合併報酬（權益加總後的 pct）
+        idx = rc.index.union(rs.index)
+        # 簡化：直接用兩個 book 報酬加權（等權近似）
+        combined = (rc.reindex(idx).fillna(0) + rs.reindex(idx).fillna(0)).dropna()
+        rets = combined.tail(lookback)
+
+    if len(rets) < 5:
+        return {"ann_vol": 0.12, "method": "insufficient_data"}
+
+    # EWMA variance
+    var = float(rets.var())
+    lam = ewma_lambda
+    for r in rets.values:
+        var = lam * var + (1 - lam) * (r ** 2)
+    ann_vol = float(np.sqrt(max(var, 1e-12)) * np.sqrt(252))
+    return {"ann_vol": round(ann_vol, 5), "method": "ewma", "n_obs": len(rets)}
+
+
+def compute_tiered_scales(
+    forecast_ann_vol: float,
+    target_ann_vol: float = 0.10,
+    core_decay: float = 0.35,
+    sat_decay: float = 0.85,
+    core_floor: float = 0.55,
+    sat_floor: float = 0.15,
+    core_base: float = 0.25,
+    sat_base: float = 0.75,
+) -> Dict[str, float]:
+    """
+    依 forecast vol 計算 tiered core/satellite scale factors。
+    與 portfolio_vol_target.py 邏輯對齊（可獨立呼叫）。
+    """
+    if forecast_ann_vol <= 0:
+        forecast_ann_vol = 0.01
+    overall = min(1.0, max(0.10, target_ann_vol / forecast_ann_vol))
+    over = max(0.0, (forecast_ann_vol - target_ann_vol) / max(target_ann_vol, 1e-6))
+
+    core_mult = max(core_floor, 1.0 - core_decay * over)
+    sat_mult = max(sat_floor, 1.0 - sat_decay * over)
+
+    return {
+        "overall": round(overall, 4),
+        "core_mult": round(core_mult, 4),
+        "sat_mult": round(sat_mult, 4),
+        "core_effective": round(core_base * core_mult * overall, 4),
+        "sat_effective": round(sat_base * sat_mult * overall, 4),
+        "forecast_ann_vol": round(forecast_ann_vol, 4),
+        "target_ann_vol": round(target_ann_vol, 4),
+        "over": round(over, 4),
+    }
+
+
+def merge_book_equities(
+    equity_core: pd.DataFrame | pd.Series,
+    equity_sat: pd.DataFrame | pd.Series,
+    initial_capital: float = 1_000_000.0,
+) -> pd.Series:
+    """將 Core 與 Satellite 兩本 equity 合併（用於 portfolio vol 與總風險報告）。"""
+    def _series(eq):
+        if isinstance(eq, pd.DataFrame):
+            return eq.get("Equity", eq.iloc[:, 0])
+        return eq
+    ec = _series(equity_core).sort_index()
+    es = _series(equity_sat).sort_index()
+    idx = ec.index.union(es.index)
+    merged = (ec.reindex(idx).ffill() + es.reindex(idx).ffill()).dropna()
+    if len(merged) > 0 and merged.iloc[0] < initial_capital * 0.2:
+        merged = merged * (initial_capital / max(merged.iloc[0], 1))
+    return merged
+
+
+def compute_tiered_risk_summary(
+    equity_core: Optional[pd.DataFrame | pd.Series],
+    equity_sat: Optional[pd.DataFrame | pd.Series],
+    trades_core: Optional[pd.DataFrame] = None,
+    trades_sat: Optional[pd.DataFrame] = None,
+    target_ann_vol: float = 0.10,
+    initial_capital: float = 1_000_000.0,
+) -> Dict[str, Any]:
+    """
+    計算分層風險摘要：分別 + 合併 + tiered scale 建議。
+    供 paper / report 使用。
+    """
+    ec = equity_core if equity_core is not None else pd.Series(dtype=float)
+    es = equity_sat if equity_sat is not None else pd.Series(dtype=float)
+    merged_eq = merge_book_equities(ec, es, initial_capital)
+    vol_info = compute_portfolio_vol_forecast(equity_core, equity_sat, merged_eq)
+    fvol = vol_info.get("ann_vol", 0.12)
+    scales = compute_tiered_scales(fvol, target_ann_vol=target_ann_vol)
+
+    # 各自風險指標（若有 equity）
+    def _simple_metrics(eq, name):
+        if eq is None or len(eq) < 5:
+            return {f"{name}_ann_vol": None, f"{name}_mdd": None}
+        s = eq if isinstance(eq, pd.Series) else (eq["Equity"] if "Equity" in eq.columns else eq.iloc[:, 0])
+        rets = s.pct_change().dropna()
+        ann_vol = rets.std() * np.sqrt(252) if len(rets) > 1 else 0.0
+        cummax = s.cummax()
+        dd = (s / cummax - 1).min()
+        return {f"{name}_ann_vol": round(ann_vol, 4), f"{name}_mdd": round(float(dd), 4)}
+
+    out = {
+        "portfolio": {
+            "merged_ann_vol": vol_info["ann_vol"],
+            "forecast_method": vol_info.get("method"),
+            "target_ann_vol": target_ann_vol,
+            **scales,
+        },
+        "core": _simple_metrics(equity_core, "core"),
+        "satellite": _simple_metrics(equity_sat, "sat"),
+        "merged_mdd": None,
+    }
+
+    if len(merged_eq) > 5:
+        cummax = merged_eq.cummax()
+        out["merged_mdd"] = round(float((merged_eq / cummax - 1).min()), 4)
+
+    # 簡單交易統計
+    nc = int(len(trades_core)) if trades_core is not None else 0
+    ns = int(len(trades_sat)) if trades_sat is not None else 0
+    out["trades"] = {"core_trades": nc, "sat_trades": ns, "total": nc + ns}
+
+    return out
+
+
+def format_tiered_risk_summary(summary: Dict[str, Any]) -> str:
+    """格式化 tiered risk 摘要供 CLI / 報告輸出。"""
+    p = summary.get("portfolio", {})
+    lines = [
+        "═" * 52,
+        "🛡️  Hybrid Tiered Risk Budgeting 摘要",
+        "═" * 52,
+        f"  預測組合年化波動: {p.get('merged_ann_vol', 0)*100:.2f}%",
+        f"  目標年化波動:     {p.get('target_ann_vol', 0.1)*100:.1f}%",
+        f"  Overall Scale:    {p.get('overall', 1.0):.3f}",
+        f"  Core Effective:   {p.get('core_effective', 0.25):.3f} (mult={p.get('core_mult', 1.0):.3f})",
+        f"  Sat  Effective:   {p.get('sat_effective', 0.75):.3f} (mult={p.get('sat_mult', 1.0):.3f})",
+        f"  預測超額程度:     {p.get('over', 0):.3f}",
+    ]
+    if summary.get("merged_mdd") is not None:
+        lines.append(f"  合併最大回撤:     {summary['merged_mdd']*100:.1f}%")
+    lines.append(f"  Core 交易數:      {summary.get('trades',{}).get('core_trades',0)}")
+    lines.append(f"  Satellite 交易數: {summary.get('trades',{}).get('sat_trades',0)}")
+    lines.append("═" * 52)
     return "\n".join(lines)

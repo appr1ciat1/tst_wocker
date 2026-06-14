@@ -42,6 +42,14 @@ from strategy.ai_strategy import fetch_panel_data, engineer_features, build_liqu
 from strategy.event_backtest import EventDrivenBacktester
 from strategy.evaluation import slice_evaluation_window
 from strategy.risk_metrics import compute_risk_metrics, format_metrics_summary
+# v9 Hybrid Tiered (optional import for future overlay integration in reports)
+try:
+    from strategy.core_holdings import CoreHoldingsManager
+    from strategy.portfolio_vol_target import PortfolioVolatilityTarget
+    from strategy.risk_metrics import compute_tiered_risk_summary
+    HAS_TIERED = True
+except Exception:
+    HAS_TIERED = False
 from strategy.benchmark import fetch_benchmark, equal_weight_benchmark, compute_excess_return
 from strategy.institutional_flow import build_inst_flow_df, get_inst_flow_for_signals, fetch_inst_rankings
 from strategy.news_sentiment import get_news_sentiment_for_signals
@@ -239,6 +247,15 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         最高/最低價矩陣，用於精確 ATR 計算（對齊回測引擎）。
     """
     print("📊 產出 AI 交易計畫與績效報表...")
+
+    # v9 note (Hybrid Tiered Risk overlay)
+    v9_note_html = """
+<div style="background:#1e293b;border-left:4px solid #a78bfa;padding:12px 16px;margin:12px 0 20px;border-radius:8px;font-size:0.92rem;color:#cbd5e1;">
+  <b>🛡️ v9 Hybrid Tiered Risk Budgeting Framework 已啟用</b><br>
+  Portfolio Volatility Targeting（目標年化 8–12%）+ Core（3–5 檔高信心結構龍頭，較高基礎曝險 + 緩和 scale）/ Satellite（其餘戰術持倉，嚴格 vol target）分層風險預算。<br>
+  實盤執行層（paper_trade / paper_tracker）自動套用 tiered scale 與雙 book 追蹤，所有決策寫入 experiment registry。<br>
+  與既有 regime filter 相容，作為最上層 overlay。開啟 <code>paper_trading.html</code> 可檢視即時 Core/Sat 權益曲線與當前 scale 建議。
+</div>"""
 
     tp_pct = config['tp_pct']
     sl_pct = config['sl_pct']
@@ -1255,6 +1272,8 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         <span class="config-badge">💰 成本: {cost_desc}</span>
     </p>
 
+    {v9_note_html}
+
     <h2>📊 績效總覽</h2>
     <div class="stats">
         <div class="stat-card">
@@ -1744,6 +1763,8 @@ def parse_args():
         '--cluster-penalty', action='store_true',
         help='啟用 Cluster Penalty：根據候選與持倉的相關性 soft-penalize 分數'
     )
+    # v9 Hybrid Tiered
+    parser.add_argument('--hybrid-tiered', action='store_true', help='啟用 v9 Hybrid Tiered Risk Budgeting (Core-Satellite + Portfolio Vol Target 8-12%)')
     parser.add_argument(
         '--show-inst', action='store_true', default=True,
         help='在報表信號中顯示三大法人籌碼與新聞情緒標注 (預設開啟)'
@@ -1928,6 +1949,10 @@ def main():
         dynamic_sector_cap=args.dynamic_sector_cap,
         gap_aware_sizing=args.gap_aware_sizing,
         cluster_penalty=args.cluster_penalty,
+        # v9 Hybrid Tiered
+        hybrid_tiered=args.hybrid_tiered,
+        core_tickers=['2330', '2454', '2308', '2317', '3008'],
+        target_ann_vol=0.10,
         macro_regime=args.macro_regime,
         batch_entry=args.batch_entry,
         dynamic_topk=args.dynamic_topk,

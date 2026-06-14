@@ -125,7 +125,16 @@ class EventDrivenBacktester:
                  sector_flow_tilt=False,
                  tilt_strength=1.0,
                  tilt_windows=None,
-                 buy_cost=0.001425, sell_cost=0.004425):
+                 buy_cost=0.001425, sell_cost=0.004425,
+                 # v9 Hybrid Tiered Risk Budgeting
+                 hybrid_tiered=False,
+                 core_tickers=None,
+                 target_ann_vol=0.10,
+                 core_base_exposure=0.25,
+                 tiered_core_decay=0.35,
+                 tiered_sat_decay=0.85,
+                 tiered_core_floor=0.55,
+                 tiered_sat_floor=0.15):
         self.tp_pct = tp_pct
         self.sl_pct = sl_pct
         self.max_hold_days = max_hold_days
@@ -176,6 +185,17 @@ class EventDrivenBacktester:
         self.tilt_windows = tilt_windows if tilt_windows else [10, 15, 20]
         self.buy_cost = buy_cost
         self.sell_cost = sell_cost
+        # v9
+        self.hybrid_tiered = hybrid_tiered
+        self.core_tickers = set(core_tickers or ['2330', '2454', '2308', '2317'])
+        self.target_ann_vol = target_ann_vol
+        self.core_base_exposure = core_base_exposure
+        self.tiered_core_decay = tiered_core_decay
+        self.tiered_sat_decay = tiered_sat_decay
+        self.tiered_core_floor = tiered_core_floor
+        self.tiered_sat_floor = tiered_sat_floor
+        self._book_log = []  # for reporting which positions were core/sat
+        self._tiered_scales_log = []
 
     def _compute_atr(self, high_df, low_df, close_df, period=20):
         """計算精確的 ATR（True Range 的移動平均）。"""
@@ -473,6 +493,8 @@ class EventDrivenBacktester:
                         'Days_Held': trade['days_held'],
                         'TP_Price': round(trade['tp_price'], 2),
                         'SL_Price': round(trade['sl_price'], 2),
+                        'Book': trade.get('book', 'satellite'),  # v9
+                        'Tiered_Scale': trade.get('tiered_scale', 1.0),  # v9
                     }
                     trades.append(trade_record)
                     exited_tickers.append(ticker)
@@ -969,6 +991,30 @@ class EventDrivenBacktester:
                         batch_scale = weights.get(self.batch_entry, [1.0/self.batch_entry]*self.batch_entry)[0]
 
                     effective_pos_size = self.position_size * rank_weight * regime_scale * gap_scale * batch_scale
+
+                    # === v9 Hybrid Tiered Risk Budgeting ===
+                    book = 'core' if ticker in self.core_tickers else 'satellite'
+                    tiered_scale = 1.0
+                    if self.hybrid_tiered and len(equity_curve) > 10:
+                        try:
+                            from strategy.portfolio_vol_target import PortfolioVolatilityTarget, VolTargetConfig
+                            recent_eq = pd.Series([e['Equity'] for e in equity_curve[-60:]])
+                            pvt = PortfolioVolatilityTarget(VolTargetConfig(
+                                target_ann_vol=self.target_ann_vol,
+                                core_decay=self.tiered_core_decay,
+                                sat_decay=self.tiered_sat_decay,
+                                core_floor=self.tiered_core_floor,
+                                sat_floor=self.tiered_sat_floor,
+                                core_base_gross=self.core_base_exposure
+                            ))
+                            fvol = pvt.forecast_portfolio_ann_vol(None, None, recent_eq)
+                            scales = pvt.tiered_scale_factors(fvol)
+                            tiered_scale = scales['core_effective'] if book == 'core' else scales['sat_effective']
+                            self._tiered_scales_log.append({'date': str(date), 'book': book, 'scale': round(tiered_scale, 4), 'fvol': round(fvol, 4)})
+                        except Exception:
+                            tiered_scale = 1.0
+                    effective_pos_size = effective_pos_size * tiered_scale
+
                     if self.dynamic_risk and market_daily_ret is not None:
                         try:
                             prev_date = dates[i - 1]
@@ -1029,6 +1075,8 @@ class EventDrivenBacktester:
                                                         and not pd.isna(atr_val)) else 0,
                             'days_held': 0,
                             'actual_cost': actual_cost,
+                            'book': book,  # v9
+                            'tiered_scale': round(tiered_scale, 4),  # v9
                         }
 
             # ── Step 4: 結算今日總權益（現金 + 所有持倉市值） ──

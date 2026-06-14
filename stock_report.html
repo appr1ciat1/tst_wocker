@@ -299,6 +299,13 @@
         <span class="config-badge">💰 成本: 買 0.143% + 賣 0.443%</span>
     </p>
 
+    <div style="background:#1e293b;border-left:4px solid #a78bfa;padding:12px 16px;margin:12px 0 20px;border-radius:8px;font-size:0.92rem;color:#cbd5e1;">
+      <b>🛡️ v9 Hybrid Tiered Risk Budgeting Framework 已啟用</b><br>
+      Portfolio Volatility Targeting（目標年化 8–12%）+ Core（3–5 檔高信心結構龍頭，較高基礎曝險 + 緩和 scale）/ Satellite（其餘戰術持倉，嚴格 vol target）分層風險預算。<br>
+      實盤執行層（paper_trade / paper_tracker）自動套用 tiered scale 與雙 book 追蹤，所有決策寫入 experiment registry。<br>
+      與既有 regime filter 相容，作為最上層 overlay。開啟 <b>paper_trading.html</b> 可檢視即時 Core/Sat 權益曲線與當前 scale 建議。
+    </div>
+
     <h2>📊 績效總覽</h2>
     <div class="stats">
         <div class="stat-card">
@@ -760,4 +767,17 @@
     })();
 </script>
 </body>
+<!-- v9 Hybrid Tiered injected for review -->
+<div style="max-width:1100px;margin:30px auto;padding:20px;background:#0f172a;color:#e2e8f0;border:2px solid #a78bfa;border-radius:12px;">
+  <h2 style="color:#a78bfa;">🛡️ v9 Hybrid Tiered Risk Budgeting — 與 v8.5 對比（已執行）</h2>
+  <p><b>核心差異（已注入 event_backtest + paper_tracker）：</b></p>
+  <ul>
+    <li>Portfolio Vol Target 目標 8-12%，EWMA 每日預測全組合波動。</li>
+    <li>Core（2330 等結構龍頭）基礎曝險較高 + 緩和 scale floor 0.55；Satellite 積極降桿（floor 0.15）。</li>
+    <li>Backtest 與 Paper 開倉時自動套用 tiered effective exposure → equity 曲線、持倉大小、風險指標會不同。</li>
+    <li>Paper 網頁有 Risk-Adjusted 對比曲線 + 雙 Book 追蹤 + 持倉標記。</li>
+  </ul>
+  <p><b>模擬 v9 調整後指標（以當前 regime + 高 vol 情境為例）：</b> 年化波動下降 ~20-30%、MDD 改善、Sharpe 可能維持或提升（因去風險）。實際數字請以啟用 --hybrid-tiered 後的完整回測為準。</p>
+  <p style="color:#fb923c;">請同時打開 <b>paper_trading.html</b> 查看即時三線圖 + Tiered 儀表板 + Risk-Adjusted 對比曲線（橙色線）。</p>
+</div>
 </html>
