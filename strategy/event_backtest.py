@@ -129,7 +129,18 @@ class EventDrivenBacktester:
                  # v9 Hybrid Tiered Risk Budgeting
                  hybrid_tiered=False,
                  core_tickers=None,
-                 target_ann_vol=0.10,
+                 target_ann_vol=0.15,
+                 rotation_trigger_vol=None,
+                 crisis_vol=None,
+                 cooling_days=None,
+                 cooling_sat_boost=None,
+                 cooling_core_boost=None,
+                 stress_sat_floor=None,
+                 stress_core_ceiling=None,
+                 sat_alpha_trim_frac=None,
+                 sat_alpha_trim_min_pnl=None,
+                 core_alpha_trim_frac=None,
+                 core_alpha_trim_min_pnl=None,
                  core_base_exposure=0.25,
                  tiered_core_decay=0.35,
                  tiered_sat_decay=0.85,
@@ -189,6 +200,45 @@ class EventDrivenBacktester:
         self.hybrid_tiered = hybrid_tiered
         self.core_tickers = set(core_tickers or ['2330', '2454', '2308', '2317'])
         self.target_ann_vol = target_ann_vol
+        from strategy.portfolio_vol_target import (
+            ROTATION_TRIGGER_VOL, CRISIS_VOL,
+            COOLING_DAYS_DEFAULT, COOLING_SAT_BOOST_DEFAULT,
+            COOLING_CORE_BOOST_DEFAULT, STRESS_SAT_FLOOR_DEFAULT,
+            STRESS_CORE_CEILING_DEFAULT, SAT_ALPHA_TRIM_FRAC_DEFAULT,
+            SAT_ALPHA_TRIM_MIN_PNL_DEFAULT, CORE_ALPHA_TRIM_FRAC_DEFAULT,
+            CORE_ALPHA_TRIM_MIN_PNL_DEFAULT,
+        )
+        if rotation_trigger_vol is None:
+            rotation_trigger_vol = ROTATION_TRIGGER_VOL
+        if crisis_vol is None:
+            crisis_vol = CRISIS_VOL
+        self.rotation_trigger_vol = rotation_trigger_vol
+        self.crisis_vol = crisis_vol
+        self.cooling_days = cooling_days if cooling_days is not None else COOLING_DAYS_DEFAULT
+        self.cooling_sat_boost = (
+            cooling_sat_boost if cooling_sat_boost is not None else COOLING_SAT_BOOST_DEFAULT
+        )
+        self.cooling_core_boost = (
+            cooling_core_boost if cooling_core_boost is not None else COOLING_CORE_BOOST_DEFAULT
+        )
+        self.stress_sat_floor = (
+            stress_sat_floor if stress_sat_floor is not None else STRESS_SAT_FLOOR_DEFAULT
+        )
+        self.stress_core_ceiling = (
+            stress_core_ceiling if stress_core_ceiling is not None else STRESS_CORE_CEILING_DEFAULT
+        )
+        self.sat_alpha_trim_frac = (
+            sat_alpha_trim_frac if sat_alpha_trim_frac is not None else SAT_ALPHA_TRIM_FRAC_DEFAULT
+        )
+        self.sat_alpha_trim_min_pnl = (
+            sat_alpha_trim_min_pnl if sat_alpha_trim_min_pnl is not None else SAT_ALPHA_TRIM_MIN_PNL_DEFAULT
+        )
+        self.core_alpha_trim_frac = (
+            core_alpha_trim_frac if core_alpha_trim_frac is not None else CORE_ALPHA_TRIM_FRAC_DEFAULT
+        )
+        self.core_alpha_trim_min_pnl = (
+            core_alpha_trim_min_pnl if core_alpha_trim_min_pnl is not None else CORE_ALPHA_TRIM_MIN_PNL_DEFAULT
+        )
         self.core_base_exposure = core_base_exposure
         self.tiered_core_decay = tiered_core_decay
         self.tiered_sat_decay = tiered_sat_decay
@@ -196,6 +246,11 @@ class EventDrivenBacktester:
         self.tiered_sat_floor = tiered_sat_floor
         self._book_log = []  # for reporting which positions were core/sat
         self._tiered_scales_log = []
+        self._last_fvol = None
+        self._daily_rotation = {}
+        self._daily_sat_trade_scale = 1.0
+        self._last_dd_pause_pct = dd_pause_pct
+        self._cooling_days_left = 0
 
     def _compute_atr(self, high_df, low_df, close_df, period=20):
         """計算精確的 ATR（True Range 的移動平均）。"""
@@ -281,9 +336,9 @@ class EventDrivenBacktester:
         # 預計算 20MA 供 breadth 重用（避免迴圈內反覆 rolling）
         self._ma20_all = close_df.rolling(20).mean() if self.breadth_regime else None
 
-        # 宏觀 Regime：下載 VIX
+        # 宏觀 Regime / v9：下載 VIX（VIX>33 建倉規則）
         self._vix_series = None
-        if self.macro_regime:
+        if self.macro_regime or self.hybrid_tiered:
             try:
                 import yfinance as yf
                 vix = yf.download('^VIX', start=close_df.index[0], end=close_df.index[-1], progress=False)
@@ -527,7 +582,10 @@ class EventDrivenBacktester:
             # === 回撤竟日卡：權益距 peak 超過 N% 則暫停新倉 ===
             peak_equity = max(peak_equity, current_equity)
             current_dd = (current_equity - peak_equity) / peak_equity
-            if current_dd < -self.dd_pause_pct and dd_pause_counter <= 0:
+            effective_dd_pause = (
+                self._last_dd_pause_pct if self.hybrid_tiered else self.dd_pause_pct
+            )
+            if current_dd < -effective_dd_pause and dd_pause_counter <= 0:
                 dd_pause_counter = self.dd_pause_days
 
             # 暫停計數器遞減
@@ -584,6 +642,123 @@ class EventDrivenBacktester:
                                         ticker_history[ticker].append(profit_pct)
                                 for t in delev_tickers:
                                     del active_trades[t]
+                except Exception:
+                    pass
+
+            # ── Step 2.6: v9 資金輪動（高波動→Core / 回落→Core獲利了結回流Sat）──
+            self._daily_rotation = {
+                'core_rotation_boost': 1.0,
+                'sat_rotation_boost': 1.0,
+                'rotate_sat_profits_to_core': 0.0,
+                'rotate_core_profits_to_sat': 0.0,
+                'sat_entry_freeze': 0.0,
+                'dd_pause_pct': self.dd_pause_pct,
+                'vol_regime': 'normal',
+            }
+            self._daily_sat_trade_scale = 1.0
+            if self.hybrid_tiered and len(equity_curve) >= 60:
+                try:
+                    from strategy.portfolio_vol_target import PortfolioVolatilityTarget, VolTargetConfig
+                    recent_eq = pd.Series([e['Equity'] for e in equity_curve[-60:]])
+                    pvt = PortfolioVolatilityTarget(VolTargetConfig(
+                        target_ann_vol=self.target_ann_vol,
+                        rotation_trigger_vol=self.rotation_trigger_vol,
+                        crisis_vol=self.crisis_vol,
+                        cooling_days=self.cooling_days,
+                        cooling_sat_boost=self.cooling_sat_boost,
+                        cooling_core_boost=self.cooling_core_boost,
+                        stress_sat_floor=self.stress_sat_floor,
+                        stress_core_ceiling=self.stress_core_ceiling,
+                        sat_alpha_trim_frac=self.sat_alpha_trim_frac,
+                        sat_alpha_trim_min_pnl=self.sat_alpha_trim_min_pnl,
+                        core_alpha_trim_frac=self.core_alpha_trim_frac,
+                        core_alpha_trim_min_pnl=self.core_alpha_trim_min_pnl,
+                        core_decay=self.tiered_core_decay,
+                        sat_decay=self.tiered_sat_decay,
+                        core_floor=self.tiered_core_floor,
+                        sat_floor=self.tiered_sat_floor,
+                        core_base_gross=self.core_base_exposure,
+                    ))
+                    pvt._prev_forecast_vol = self._last_fvol
+                    pvt._cooling_days_left = self._cooling_days_left
+                    fvol = pvt.forecast_portfolio_ann_vol(None, None, recent_eq)
+                    scales = pvt.tiered_scale_factors(fvol)
+                    if scales.get('cooling_transition', 0) >= 1.0:
+                        self._cooling_days_left = self.cooling_days
+                    elif self._cooling_days_left > 0:
+                        self._cooling_days_left -= 1
+
+                    self._daily_rotation = {
+                        k: scales[k] for k in (
+                            'core_rotation_boost', 'sat_rotation_boost',
+                            'rotate_sat_profits_to_core', 'rotate_core_profits_to_sat',
+                            'sat_entry_freeze', 'dd_pause_pct', 'vol_regime',
+                            'stress_transition', 'cooling_active',
+                            'sat_alpha_trim_frac', 'sat_alpha_trim_min_pnl',
+                            'core_alpha_trim_frac', 'core_alpha_trim_min_pnl',
+                        ) if k in scales
+                    }
+                    self._daily_sat_trade_scale = 1.0
+                    self._last_fvol = fvol
+                    self._last_dd_pause_pct = scales.get('dd_pause_pct', self.dd_pause_pct)
+
+                    def _trim_book_alpha(book, trim_frac, min_pnl, reason):
+                        nonlocal capital
+                        for ticker, trade in list(active_trades.items()):
+                            if trade.get('book') != book:
+                                continue
+                            cur = close_df[ticker].iloc[i] if ticker in close_df.columns else np.nan
+                            if pd.isna(cur) or cur <= 0:
+                                continue
+                            unrealized = (cur / trade['entry_price']) - 1
+                            if unrealized < min_pnl:
+                                continue
+                            shares_sell = int(trade['shares'] * trim_frac)
+                            if shares_sell <= 0:
+                                continue
+                            exit_px = cur * (1 - self.slippage)
+                            revenue = shares_sell * exit_px * (1 - self.sell_cost)
+                            capital += revenue
+                            cost_basis = trade['actual_cost'] * (shares_sell / trade['shares'])
+                            profit_pct = (revenue - cost_basis) / cost_basis if cost_basis > 0 else 0
+                            trade['shares'] -= shares_sell
+                            trade['actual_cost'] -= cost_basis
+                            trades.append({
+                                'Ticker': ticker,
+                                'Entry_Date': trade['entry_date'].strftime('%Y-%m-%d'),
+                                'Exit_Date': date.strftime('%Y-%m-%d'),
+                                'Entry_Price': round(trade['entry_price'], 2),
+                                'Exit_Price': round(cur, 2),
+                                'Return_Pct': round(profit_pct, 4),
+                                'Reason': reason,
+                                'Days_Held': trade['days_held'],
+                                'TP_Price': round(trade['tp_price'], 2),
+                                'SL_Price': round(trade['sl_price'], 2),
+                                'Book': book,
+                                'Tiered_Scale': 1.0,
+                            })
+
+                    if self._daily_rotation.get('rotate_sat_profits_to_core', 0) >= 1.0:
+                        _trim_book_alpha(
+                            'satellite',
+                            self.sat_alpha_trim_frac,
+                            self.sat_alpha_trim_min_pnl,
+                            '🟠 輪動至Core(波動升破)',
+                        )
+                    if self._daily_rotation.get('rotate_core_profits_to_sat', 0) >= 1.0:
+                        _trim_book_alpha(
+                            'core',
+                            self.core_alpha_trim_frac,
+                            self.core_alpha_trim_min_pnl,
+                            '🔵 輪動回Sat(波動回落)',
+                        )
+                    elif self._cooling_days_left > 0:
+                        _trim_book_alpha(
+                            'core',
+                            0.20,
+                            0.04,
+                            '🔵 輪動回Sat(冷卻續跑)',
+                        )
                 except Exception:
                     pass
 
@@ -645,19 +820,22 @@ class EventDrivenBacktester:
                     except Exception:
                         pass
 
-                # === Macro Regime：VIX 宏觀壓力調節 ===
-                if self.macro_regime and self._vix_series is not None and regime_ok:
+                # === Macro Regime：VIX（v9 不在此壓全局 regime；改於單筆 sizing 處理）===
+                # legacy v8.5 + macro_regime：VIX>33 允許建倉，僅 22~33 溫和降曝險
+                if self.macro_regime and not self.hybrid_tiered and self._vix_series is not None and regime_ok:
                     try:
                         prev_date = dates[i - 1]
                         vix_idx = self._vix_series.index.get_indexer([prev_date], method='ffill')[0]
                         if vix_idx >= 0:
                             vix_val = float(self._vix_series.iloc[vix_idx])
-                            if vix_val > 30:
-                                regime_scale *= 0.3   # 極端恋慌
+                            if vix_val > 33:
+                                pass  # 高恐慌：依策略訊號建倉，不額外壓制
+                            elif vix_val > 30:
+                                regime_scale *= 0.5
                             elif vix_val > 25:
-                                regime_scale *= 0.5   # 高度緊張
+                                regime_scale *= 0.7
                             elif vix_val > 22:
-                                regime_scale *= 0.7   # 警戒
+                                regime_scale *= 0.85
                     except Exception:
                         pass
 
@@ -990,30 +1168,47 @@ class EventDrivenBacktester:
                         weights = {2: [0.55, 0.45], 3: [0.45, 0.30, 0.25]}
                         batch_scale = weights.get(self.batch_entry, [1.0/self.batch_entry]*self.batch_entry)[0]
 
+                    book = 'core' if ticker in self.core_tickers else 'satellite'
+                    if (self.hybrid_tiered and book == 'satellite'
+                            and (self._daily_rotation or {}).get('sat_entry_freeze', 0) >= 1.0):
+                        continue
+
                     effective_pos_size = self.position_size * rank_weight * regime_scale * gap_scale * batch_scale
 
-                    # === v9 Hybrid Tiered Risk Budgeting ===
-                    book = 'core' if ticker in self.core_tickers else 'satellite'
-                    tiered_scale = 1.0
-                    if self.hybrid_tiered and len(equity_curve) > 10:
+                    # === v9 hybrid：平常滿倉，不因 VIX 縮 Satellite ===
+                    vix_trade_mult = 1.0
+                    if self._vix_series is not None and i > 0 and not self.hybrid_tiered:
                         try:
-                            from strategy.portfolio_vol_target import PortfolioVolatilityTarget, VolTargetConfig
-                            recent_eq = pd.Series([e['Equity'] for e in equity_curve[-60:]])
-                            pvt = PortfolioVolatilityTarget(VolTargetConfig(
-                                target_ann_vol=self.target_ann_vol,
-                                core_decay=self.tiered_core_decay,
-                                sat_decay=self.tiered_sat_decay,
-                                core_floor=self.tiered_core_floor,
-                                sat_floor=self.tiered_sat_floor,
-                                core_base_gross=self.core_base_exposure
-                            ))
-                            fvol = pvt.forecast_portfolio_ann_vol(None, None, recent_eq)
-                            scales = pvt.tiered_scale_factors(fvol)
-                            tiered_scale = scales['core_effective'] if book == 'core' else scales['sat_effective']
-                            self._tiered_scales_log.append({'date': str(date), 'book': book, 'scale': round(tiered_scale, 4), 'fvol': round(fvol, 4)})
+                            prev_date = dates[i - 1]
+                            vix_idx = self._vix_series.index.get_indexer([prev_date], method='ffill')[0]
+                            if vix_idx >= 0:
+                                vix_val = float(self._vix_series.iloc[vix_idx])
+                                if vix_val > 33:
+                                    vix_trade_mult = 0.8
+                                elif vix_val > 28:
+                                    vix_trade_mult = 0.0
                         except Exception:
-                            tiered_scale = 1.0
-                    effective_pos_size = effective_pos_size * tiered_scale
+                            pass
+
+                    rotation_boost = 1.0
+                    tiered_scale = 1.0
+                    if self.hybrid_tiered:
+                        rot = self._daily_rotation or {}
+                        if book == 'core':
+                            rotation_boost = rot.get('core_rotation_boost', 1.0)
+                        else:
+                            rotation_boost = rot.get('sat_rotation_boost', 1.0)
+                        self._tiered_scales_log.append({
+                            'date': str(date), 'book': book,
+                            'scale': round(rotation_boost, 4),
+                            'tiered_scale': 1.0,
+                            'rotation_boost': round(rotation_boost, 4),
+                            'vol_regime': rot.get('vol_regime', 'normal'),
+                            'fvol': round(self._last_fvol or 0, 4),
+                            'vix_mult': round(vix_trade_mult, 4),
+                        })
+
+                    effective_pos_size = effective_pos_size * vix_trade_mult * rotation_boost
 
                     if self.dynamic_risk and market_daily_ret is not None:
                         try:

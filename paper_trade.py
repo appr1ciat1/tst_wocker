@@ -575,7 +575,7 @@ def compute_current_tiered_scales(args):
         eq_sat = eq_merged * 0.75
 
     pvt = PortfolioVolatilityTarget(VolTargetConfig(
-        target_ann_vol=getattr(args, 'target_vol', 0.10),
+        target_ann_vol=getattr(args, 'target_vol', 0.15),
         core_decay=getattr(args, 'core_decay', 0.35),
         sat_decay=getattr(args, 'sat_decay', 0.85),
         core_floor=getattr(args, 'core_floor', 0.55),
@@ -766,7 +766,7 @@ def generate_monthly_report(args):
             summary = compute_tiered_risk_summary(
                 equity_core=eq_data.get('core_equity_curve'),
                 equity_sat=eq_data.get('sat_equity_curve'),
-                target_ann_vol=0.10
+                target_ann_vol=0.15
             )
             print("\n" + format_tiered_risk_summary(summary))
     except Exception:
@@ -811,7 +811,7 @@ def main():
 
     # v9 tiered (NEW)
     tiered_parser = subparsers.add_parser('tiered', help='計算當前 Portfolio Vol Target + Tiered Core/Sat scales')
-    tiered_parser.add_argument('--target-vol', type=float, default=0.10, help='目標年化波動率 (預設 0.10 = 10%)')
+    tiered_parser.add_argument('--target-vol', type=float, default=0.15, help='目標年化波動率 (預設 0.15 = 15%)')
     tiered_parser.add_argument('--core-decay', type=float, default=0.35, help='Core 衰減係數')
     tiered_parser.add_argument('--sat-decay', type=float, default=0.85, help='Satellite 衰減係數（較激進）')
     tiered_parser.add_argument('--core-floor', type=float, default=0.55)

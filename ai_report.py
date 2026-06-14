@@ -234,10 +234,70 @@ def _build_inst_section():
 
 
 
+def _build_tiered_dashboard_html(tiered_scales_log, config):
+    """由回測 tiered scale log 產出 v9 風險預算儀表板 HTML。"""
+    if not tiered_scales_log:
+        return ""
+    try:
+        log_df = pd.DataFrame(tiered_scales_log)
+        if log_df.empty:
+            return ""
+        latest_date = log_df['date'].max()
+        latest = log_df[log_df['date'] == latest_date]
+        core_scale = float(latest.loc[latest['book'] == 'core', 'scale'].iloc[-1]) if (latest['book'] == 'core').any() else 1.0
+        sat_scale = float(latest.loc[latest['book'] == 'satellite', 'scale'].iloc[-1]) if (latest['book'] == 'satellite').any() else 1.0
+        overall_scale = float(latest['overall'].iloc[-1]) if 'overall' in latest.columns else 1.0
+        fvol = float(latest['fvol'].iloc[-1]) * 100
+        target_vol = config.get('target_ann_vol', 0.15) * 100
+        sat_log = log_df[log_df['book'] == 'satellite'] if 'book' in log_df.columns else log_df
+        avg_scale = float(sat_log['scale'].mean()) if not sat_log.empty else 1.0
+        daily_scale = sat_log.groupby('date')['scale'].mean() if not sat_log.empty else pd.Series(dtype=float)
+        delev_days = int((daily_scale < 0.95).sum()) if len(daily_scale) else 0
+        total_days = len(daily_scale)
+        status = "🟢 正常" if avg_scale > 0.95 else ("🟡 降桿中" if avg_scale > 0.6 else "🔴 積極去風險")
+        return f"""
+    <h2>🛡️ v9 Hybrid Tiered 風險預算（回測實際套用）</h2>
+    <p class="section-note">高波動→Core 避險；波動回落→賣 alpha 輪動至高動能 Sat（12日加碼視窗）。目標波動 {target_vol:.0f}%。</p>
+    <div class="stats">
+        <div class="stat-card">
+            <div class="label">預測年化波動</div>
+            <div class="value" style="color:#fbbf24;">{fvol:.1f}%</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Overall Vol Scale</div>
+            <div class="value" style="color:#60a5fa;">{overall_scale:.3f}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Core Trade Scale</div>
+            <div class="value green">{core_scale:.3f}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Satellite Trade Scale</div>
+            <div class="value" style="color:#f87171;">{sat_scale:.3f}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Sat 平均 Scale</div>
+            <div class="value">{avg_scale:.3f}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Sat 降桿日佔比</div>
+            <div class="value">{delev_days}/{total_days} 天</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Tiered 狀態（回測末）</div>
+            <div class="value" style="font-size:1.1rem;">{status}</div>
+        </div>
+    </div>
+"""
+    except Exception:
+        return ""
+
+
 def generate_report(trades_df, equity_df, total_score, close_df, config,
                     metrics, benchmark_equity=None, ew_equity=None,
                     benchmark2_equity=None,
-                    high_df=None, low_df=None, show_inst=True):
+                    high_df=None, low_df=None, show_inst=True,
+                    tiered_scales_log=None):
     """
     產出 AI 交易計畫 HTML 報表與資金曲線圖（v2 完整版）。
 
@@ -248,13 +308,20 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     """
     print("📊 產出 AI 交易計畫與績效報表...")
 
-    # v9 note (Hybrid Tiered Risk overlay)
-    v9_note_html = """
+    hybrid_tiered = bool(config.get('hybrid_tiered', False))
+    strategy_label = 'v9' if hybrid_tiered else 'v8.5'
+    tiered_subtitle = (
+        '<span style="font-size:0.7em;color:#a78bfa"> Hybrid Tiered Risk Budgeting</span>'
+        if hybrid_tiered else ''
+    )
+    strategy_version = 'v9-hybrid-tiered' if hybrid_tiered else 'v8.5'
+    tiered_dashboard_html = _build_tiered_dashboard_html(tiered_scales_log, config) if hybrid_tiered else ""
+    v9_note_html = ""
+    if hybrid_tiered:
+        v9_note_html = """
 <div style="background:#1e293b;border-left:4px solid #a78bfa;padding:12px 16px;margin:12px 0 20px;border-radius:8px;font-size:0.92rem;color:#cbd5e1;">
-  <b>🛡️ v9 Hybrid Tiered Risk Budgeting Framework 已啟用</b><br>
-  Portfolio Volatility Targeting（目標年化 8–12%）+ Core（3–5 檔高信心結構龍頭，較高基礎曝險 + 緩和 scale）/ Satellite（其餘戰術持倉，嚴格 vol target）分層風險預算。<br>
-  實盤執行層（paper_trade / paper_tracker）自動套用 tiered scale 與雙 book 追蹤，所有決策寫入 experiment registry。<br>
-  與既有 regime filter 相容，作為最上層 overlay。開啟 <code>paper_trading.html</code> 可檢視即時 Core/Sat 權益曲線與當前 scale 建議。
+  <b>🛡️ v9 Hybrid Tiered — 回測已啟用</b><br>
+  <b>Core alpha 不降槓</b>（scale=1）。高波動時 <b>Sat 縮倉、資金轉入 Core</b>；波動回落時 <b>Core 獲利了結、資金回流 Sat</b>。基礎曝險跟隨 0050/Breadth；<b>VIX&gt;33 允許建倉</b>。
 </div>"""
 
     tp_pct = config['tp_pct']
@@ -322,7 +389,8 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 
     mode_label = f"ATR×{config.get('tp_atr_mult', 3)}/{config.get('sl_atr_mult', 1.5)}" \
         if tp_sl_mode == 'atr' else f"TP +{tp_pct*100:.0f}% / SL -{sl_pct*100:.0f}%"
-    ax1.set_title(f'AI Quant v8  |  {mode_label}  |  Top-{top_k}  |  Hold ≤{max_hold_days}D',
+    chart_version = 'v9 Tiered' if hybrid_tiered else 'v8.5'
+    ax1.set_title(f'AI Quant {chart_version}  |  {mode_label}  |  Top-{top_k}  |  Hold ≤{max_hold_days}D',
                   fontweight='bold', fontsize=14, color='#1d1d1f')
     ax1.set_ylabel('Portfolio Value (TWD)', fontsize=11, color='#1d1d1f')
     ax1.tick_params(colors='#1d1d1f')
@@ -506,7 +574,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
                 'sl_price': round(float(sl_price), 4),
                 'max_hold_days': int(max_hold_days),
                 'time_exit': time_exit,
-                'model_version': 'v8.5',
+                'model_version': strategy_version,
             })
 
     # 顯示未被選入的候選（排名 > Top-K）
@@ -976,8 +1044,8 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 台股量化交易 v8.5 — {report_date}</title>
-    <meta name="description" content="AI 驅動的台股量化交易系統 v8.5，完整風險報告、Benchmark 對比、OCO 智慧掛單建議">
+    <title>AI 台股量化交易 {strategy_label} — {report_date}</title>
+    <meta name="description" content="AI 驅動的台股量化交易系統 {strategy_label}，完整風險報告、Benchmark 對比與交易計畫">
     <script>
         (function() {{
             let savedTheme = null;
@@ -1263,7 +1331,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 </button>
 <div class="container">
 
-    <h1>🎯 AI 台股量化交易 v8.5</h1>
+    <h1>🎯 AI 台股量化交易 {strategy_label}{tiered_subtitle}</h1>
     <p class="subtitle">
         Event-Driven System &nbsp;|&nbsp; 報表日期: {report_date} &nbsp;|&nbsp;
         <span class="config-badge">🛡️ {mode_html}</span>
@@ -1273,7 +1341,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     </p>
 
     {v9_note_html}
-
+{tiered_dashboard_html}
     <h2>📊 績效總覽</h2>
     <div class="stats">
         <div class="stat-card">
@@ -1409,7 +1477,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         ⚠️ <b>免責聲明：</b>本報表由 AI 量化模型自動產出，僅供學術研究與技術交流之用，
         不構成任何投資建議。歷史回測績效不代表未來實際報酬，投資有風險，決策請自行負責。
         <br><br>
-        <b>v8.5 方法論：</b>Entry = t+1 open | TP/SL = {mode_html} | 選股 = Top-{top_k} cross-sectional rank |
+        <b>{'v9 Hybrid Tiered' if hybrid_tiered else 'v8.5'} 方法論：</b>Entry = t+1 open | TP/SL = {mode_html} | 選股 = Top-{top_k} cross-sectional rank |{' + Portfolio Vol Target + Core-Satellite overlay |' if hybrid_tiered else ' '}
         成本 = {cost_desc} | 回測期 = {m['years']:.1f} 年 | 因子 = Mom(20d)×3 + Trend(60MA)×1
     </div>
 
@@ -1468,7 +1536,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         git_sha = None
     metadata = {
         'created_at': datetime.now().isoformat(),
-        'strategy_version': 'v8.5',
+        'strategy_version': strategy_version,
         'git_sha': git_sha,
         'report_date': latest_date.strftime('%Y-%m-%d'),
         'config': config,
@@ -1499,7 +1567,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 def parse_args():
     """解析命令列參數。"""
     parser = argparse.ArgumentParser(
-        description='AI 台股量化交易系統 v8.5 — 事件驅動回測與交易計畫產生器'
+        description='AI 台股量化交易系統 v9 (Hybrid Tiered Risk Budgeting) — 事件驅動回測與交易計畫產生器'
     )
     # 股池
     parser.add_argument(
@@ -1763,8 +1831,23 @@ def parse_args():
         '--cluster-penalty', action='store_true',
         help='啟用 Cluster Penalty：根據候選與持倉的相關性 soft-penalize 分數'
     )
-    # v9 Hybrid Tiered
-    parser.add_argument('--hybrid-tiered', action='store_true', help='啟用 v9 Hybrid Tiered Risk Budgeting (Core-Satellite + Portfolio Vol Target 8-12%)')
+    # v9 Hybrid Tiered（預設開啟，與 paper_tracker 一致）
+    parser.add_argument(
+        '--hybrid-tiered', action='store_true', default=True,
+        help='啟用 v9 Hybrid Tiered Risk Budgeting (Core-Satellite + Vol Target 15%%) [預設開啟]'
+    )
+    parser.add_argument(
+        '--no-hybrid-tiered', dest='hybrid_tiered', action='store_false',
+        help='關閉 v9 tiered overlay，回退 v8.5 純 alpha 回測'
+    )
+    parser.add_argument(
+        '--rotation-trigger', type=float, default=None,
+        help='v9 輪動門檻年化波動 (預設 0.22 = 22%%)'
+    )
+    parser.add_argument(
+        '--crisis-vol', type=float, default=None,
+        help='v9 危機波動門檻 (預設 0.30 = 30%%)'
+    )
     parser.add_argument(
         '--show-inst', action='store_true', default=True,
         help='在報表信號中顯示三大法人籌碼與新聞情緒標注 (預設開啟)'
@@ -1775,7 +1858,7 @@ def parse_args():
     )
     parser.add_argument(
         '--macro-regime', action='store_true',
-        help='啟用宏觀 Regime 疊加：VIX > 22/25/30 時降低曝險'
+        help='啟用宏觀 Regime 疊加（v8.5）；v9 預設 VIX>33 建倉、僅 Satellite 溫和調節'
     )
     parser.add_argument(
         '--batch-entry', type=int, default=1, choices=[1],
@@ -1845,7 +1928,8 @@ def main():
     trailing_str = f" +Trailing({args.trailing_atr}×ATR)" if args.trailing else ""
 
     print("=" * 60)
-    print("🎯 AI 台股量化交易系統 v8.5")
+    tiered_str = "ON (v9)" if args.hybrid_tiered else "OFF (v8.5)"
+    print(f"🎯 AI 台股量化交易系統 — Hybrid Tiered: {tiered_str}")
     print("=" * 60)
     print(f"   股池: {mode_str}")
     print(f"   TP/SL: {tp_sl_str}{trailing_str}  Top-K: {args.top_k}  持倉上限: {args.hold_days} 天")
@@ -1952,7 +2036,9 @@ def main():
         # v9 Hybrid Tiered
         hybrid_tiered=args.hybrid_tiered,
         core_tickers=['2330', '2454', '2308', '2317', '3008'],
-        target_ann_vol=0.10,
+        target_ann_vol=0.15,
+        rotation_trigger_vol=args.rotation_trigger,
+        crisis_vol=args.crisis_vol,
         macro_regime=args.macro_regime,
         batch_entry=args.batch_entry,
         dynamic_topk=args.dynamic_topk,
@@ -2018,12 +2104,16 @@ def main():
         'top_k': args.top_k,
         'buy_cost': args.buy_cost,
         'sell_cost': args.sell_cost,
+        'hybrid_tiered': args.hybrid_tiered,
+        'target_ann_vol': 0.15,
     }
+    tiered_scales_log = getattr(backtester, '_tiered_scales_log', None) if args.hybrid_tiered else None
     generate_report(report_trades_df, report_equity_df, total_score, close_df, config,
                     metrics, benchmark_equity, ew_equity,
                     benchmark2_equity=benchmark2_equity,
                     high_df=high_df, low_df=low_df,
-                    show_inst=args.show_inst)
+                    show_inst=args.show_inst,
+                    tiered_scales_log=tiered_scales_log)
     print("\n🚀 全部完成！請打開 stock_report.html 查看結果。")
 
 

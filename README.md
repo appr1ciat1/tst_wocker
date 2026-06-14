@@ -10,13 +10,11 @@ v9 在原有雙策略（v8.5 Momentum + Sector Rotation v2）之上，導入 **P
 
 > 最新更新：2026-06-14（v9 Hybrid Tiered 完整落地）。舊版 README 的高 Sharpe / crisis headline 不應再沿用。
 
-📊 **最新 v9 報表（含 Hybrid Tiered 內容）**：
-- stock_report.html（v9 說明區塊 + hybrid tiered 回測資訊）：https://github.com/appr1ciat1/tw_stocker/blob/main/stock_report.html
-- paper_trading.html（已內建雙 book 曲線、Tiered 儀表板、Risk-Adjusted 對比曲線、Book 標記）：https://github.com/appr1ciat1/tw_stocker/blob/main/paper_trading.html
+📊 **最新 v9 報表（GitHub Pages，含 Hybrid Tiered 內容）**：
+- [stock_report.html](https://appr1ciat1.github.io/tw_stocker/stock_report.html) — v9 說明區塊 + hybrid tiered 回測資訊
+- [paper_trading.html](https://appr1ciat1.github.io/tw_stocker/paper_trading.html) — 雙 book 曲線、Tiered 儀表板、Risk-Adjusted 對比曲線
 
-> 注意：https://voidful.github.io/tw_stocker/ 上的舊版報表為 v8.5 時期內容，未包含本 repo 的 v9 Hybrid Tiered 更新。請使用上方本 repo 的 HTML 連結查看最新結果。
-
-（以上為本 repo 最新 v9 版本的本地生成報表。舊的 voidful.github.io 連結為歷史 v8.5 內容。）
+> v9 生產參數：`rotation_trigger=22%`、`crisis_vol=30%`、冷卻 Sat 2.1× × 16 日、壓力區 `stress_sat_floor=0.85`（不主動賣 Sat）。
 
 ---
 

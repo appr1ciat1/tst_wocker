@@ -119,7 +119,8 @@ def _compute_macro_regime_series(signals):
     - SPY + SOX 雙空 → 幾乎停止
     - 復甦允許：VIX 25-28 + SPY > MA20 → 半倉
 
-    VIX > 28                            → 0.0 (完全停止)
+    VIX > 33                            → 0.8 (高恐慌建倉區，不硬停)
+    VIX 28~33                           → 0.0 (中等恐慌暫停)
     SPY↓(MA60) + SOX↓(MA60)            → 0.1 (雙空 = 最危險)
     SPY↓ + VIX 25~28 + SPY > MA20      → 0.5 (復甦允許)
     SPY↓ + VIX 25~28                    → 0.2
@@ -134,11 +135,12 @@ def _compute_macro_regime_series(signals):
     sox_trend = signals.get('sox_trend', pd.Series(1, index=signals.index))
     vix = signals.get('vix_close', pd.Series(20.0, index=signals.index))
 
-    # ── Layer 1: VIX 硬停止 (降到 28) ──
-    regime[vix > 28] = 0.0
+    # ── Layer 1: VIX — >33 建倉區；28~33 暫停 ──
+    regime[(vix > 28) & (vix <= 33)] = 0.0
+    regime[vix > 33] = 0.8
 
     # ── Layer 2: SPY + SOX 雙空 → 幾乎停止 ──
-    dual_bear = (spy_trend == 0) & (sox_trend == 0) & (vix <= 28)
+    dual_bear = (spy_trend == 0) & (sox_trend == 0) & (vix <= 33)
     regime[dual_bear] = 0.1
 
     # ── Layer 3: SPY↓ + 中等 VIX ──

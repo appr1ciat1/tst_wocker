@@ -1,4 +1,4 @@
-name: AI Quant Trading Report v8.5
+name: AI Quant Trading Report v9
 
 on:
   schedule:
@@ -58,10 +58,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run AI Quant Pipeline v8.5
+      - name: Run AI Quant Pipeline v9 (Hybrid Tiered)
         if: github.event.schedule != '0 10 1 * *'
         run: |
           python ai_report.py \
+            --hybrid-tiered \
             --regime-filter \
             --regime-graduated \
             --breadth-regime \
@@ -98,7 +99,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes"
           else
-            git commit -m "📊 AI Report v8.5 + Paper Trading ($(date -u '+%Y-%m-%d'))"
+            git commit -m "📊 AI Report v9 (Hybrid Tiered) + Paper Trading ($(date -u '+%Y-%m-%d'))"
           fi
 
           # Rebase onto latest remote without downloading the full repository history.

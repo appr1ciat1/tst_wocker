@@ -251,7 +251,7 @@ def compute_portfolio_vol_forecast(
 
 def compute_tiered_scales(
     forecast_ann_vol: float,
-    target_ann_vol: float = 0.10,
+    target_ann_vol: float = 0.15,
     core_decay: float = 0.35,
     sat_decay: float = 0.85,
     core_floor: float = 0.55,
@@ -265,16 +265,30 @@ def compute_tiered_scales(
     """
     if forecast_ann_vol <= 0:
         forecast_ann_vol = 0.01
-    overall = min(1.0, max(0.10, target_ann_vol / forecast_ann_vol))
-    over = max(0.0, (forecast_ann_vol - target_ann_vol) / max(target_ann_vol, 1e-6))
+    from strategy.portfolio_vol_target import ROTATION_TRIGGER_VOL, VolTargetConfig, PortfolioVolatilityTarget
+    band_high = ROTATION_TRIGGER_VOL
+    if forecast_ann_vol <= band_high:
+        overall = 1.0
+        over = 0.0
+    else:
+        overall = min(1.0, max(0.10, band_high / forecast_ann_vol))
+        over = (forecast_ann_vol - band_high) / max(band_high, 1e-6)
 
     core_mult = max(core_floor, 1.0 - core_decay * over)
     sat_mult = max(sat_floor, 1.0 - sat_decay * over)
+    sat_trade_scale = 1.0
+
+    rotation = PortfolioVolatilityTarget(
+        VolTargetConfig(target_ann_vol=target_ann_vol)
+    ).capital_rotation(forecast_ann_vol)
 
     return {
         "overall": round(overall, 4),
         "core_mult": round(core_mult, 4),
         "sat_mult": round(sat_mult, 4),
+        "core_trade_scale": 1.0,
+        "sat_trade_scale": sat_trade_scale,
+        **rotation,
         "core_effective": round(core_base * core_mult * overall, 4),
         "sat_effective": round(sat_base * sat_mult * overall, 4),
         "forecast_ann_vol": round(forecast_ann_vol, 4),
@@ -307,7 +321,7 @@ def compute_tiered_risk_summary(
     equity_sat: Optional[pd.DataFrame | pd.Series],
     trades_core: Optional[pd.DataFrame] = None,
     trades_sat: Optional[pd.DataFrame] = None,
-    target_ann_vol: float = 0.10,
+    target_ann_vol: float = 0.15,
     initial_capital: float = 1_000_000.0,
 ) -> Dict[str, Any]:
     """
@@ -366,8 +380,8 @@ def format_tiered_risk_summary(summary: Dict[str, Any]) -> str:
         f"  預測組合年化波動: {p.get('merged_ann_vol', 0)*100:.2f}%",
         f"  目標年化波動:     {p.get('target_ann_vol', 0.1)*100:.1f}%",
         f"  Overall Scale:    {p.get('overall', 1.0):.3f}",
-        f"  Core Effective:   {p.get('core_effective', 0.25):.3f} (mult={p.get('core_mult', 1.0):.3f})",
-        f"  Sat  Effective:   {p.get('sat_effective', 0.75):.3f} (mult={p.get('sat_mult', 1.0):.3f})",
+        f"  Core Rotation:    {p.get('core_rotation_boost', 1.0):.3f} (買滿×輪動)",
+        f"  Sat  Rotation:     {p.get('sat_rotation_boost', 1.0):.3f} (買滿×輪動)",
         f"  預測超額程度:     {p.get('over', 0):.3f}",
     ]
     if summary.get("merged_mdd") is not None:
