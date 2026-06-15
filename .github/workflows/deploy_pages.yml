@@ -1,0 +1,63 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'stock_report.html'
+      - 'paper_trading.html'
+      - 'backtest_chart.png'
+      - 'index.html'
+      - '.nojekyll'
+      - '.github/workflows/deploy_pages.yml'
+  workflow_dispatch:
+  workflow_run:
+    workflows: ['AI Quant Trading Report v9']
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
+          fetch-depth: 1
+          fetch-tags: false
+
+      - name: Prepare static site
+        run: |
+          mkdir -p _site
+          for f in stock_report.html paper_trading.html backtest_chart.png index.html; do
+            if [ ! -f "$f" ]; then
+              echo "Missing required file: $f"
+              exit 1
+            fi
+            cp "$f" _site/
+          done
+          cp .nojekyll _site/ 2>/dev/null || touch _site/.nojekyll
+          echo "Site files:"
+          ls -lh _site/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
