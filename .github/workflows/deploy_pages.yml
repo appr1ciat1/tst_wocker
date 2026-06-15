@@ -40,6 +40,13 @@ jobs:
           ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
           fetch-depth: 1
           fetch-tags: false
+          sparse-checkout: |
+            stock_report.html
+            paper_trading.html
+            backtest_chart.png
+            index.html
+            .nojekyll
+          sparse-checkout-cone-mode: false
 
       - name: Prepare static site
         run: |
