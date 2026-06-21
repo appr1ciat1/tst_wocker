@@ -78,6 +78,10 @@ jobs:
         if: github.event.schedule != '0 10 1 * *'
         run: python paper_tracker.py
 
+      - name: Strategy Comparison Dashboard (v8.5 / v9 / v9+反轉)
+        if: github.event.schedule != '0 10 1 * *'
+        run: python -m twstk.report.compare --start 2022-01-01 --out strategy_compare.html
+
       - name: Monthly Paper Trading Report
         if: github.event.schedule == '0 10 1 * *'
         run: python paper_trade.py monthly
@@ -93,7 +97,7 @@ jobs:
           git config --global user.email "voidful.stack@gmail.com"
           git config --global user.name "Voidful"
 
-          git add stock_report.html backtest_chart.png paper_trading.html paper_equity.json || true
+          git add stock_report.html backtest_chart.png paper_trading.html paper_equity.json strategy_compare.html || true
           git add -u artifacts || true
 
           if git diff --cached --quiet; then

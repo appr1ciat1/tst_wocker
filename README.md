@@ -14,7 +14,12 @@ v9 在原有雙策略（v8.5 Momentum + Sector Rotation v2）之上，導入 **P
 - [stock_report.html](https://appr1ciat1.github.io/tw_stocker/stock_report.html) — v9 說明區塊 + hybrid tiered 回測資訊
 - [paper_trading.html](https://appr1ciat1.github.io/tw_stocker/paper_trading.html) — 雙 book 曲線、Tiered 儀表板、Risk-Adjusted 對比曲線
 
-> **V3 最佳參數組**（`full_sweep` 驗證）：`trigger=22%` / `crisis=30%` / `stress_sat_floor=0.85` / `stress_core_ceiling=1.50` / 冷卻 Sat **2.1× × 16 日** / `core_alpha_trim=85%` / 不主動賣 Sat（`sat_alpha_trim=0`）。回測 ann **+79%**、Sharpe **2.46**、MDD **-18.8%**。
+> **V3 參數組**：`trigger=22%` / `crisis=30%` / `stress_sat_floor=0.85` / `stress_core_ceiling=1.50` / 冷卻 Sat **2.1× × 16 日** / `core_alpha_trim=85%` / 不主動賣 Sat（`sat_alpha_trim=0`）。
+>
+> ⚠️ **績效會隨 1200 日滾動視窗漂移，下列為點時間數值，非恆定保證。**
+> - 早期快照（README 撰寫時）：ann +79% / Sharpe 2.46 / MDD -18.8%。
+> - **2026-06-18 二次驗證**（`compare_v85_v9.py`，相同參數）：v9 **ann +73.7% / Sharpe 2.30 / MDD -24.0%**；同期 v8.5 **+81.2% / 2.26 / -15.5%**。
+> - 近期（含 2026-06 行情）**v9 未優於 v8.5**（報酬與回撤皆遜）。請以最新一次回測 / walk-forward OOS 為準，勿沿用單一 headline。
 
 ---
 

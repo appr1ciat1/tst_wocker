@@ -6,6 +6,7 @@ on:
     paths:
       - 'stock_report.html'
       - 'paper_trading.html'
+      - 'strategy_compare.html'
       - 'backtest_chart.png'
       - 'index.html'
       - '.nojekyll'
@@ -43,6 +44,7 @@ jobs:
           sparse-checkout: |
             stock_report.html
             paper_trading.html
+            strategy_compare.html
             backtest_chart.png
             index.html
             .nojekyll
@@ -58,6 +60,8 @@ jobs:
             fi
             cp "$f" _site/
           done
+          # 三策略比較頁(非必要:缺檔不阻擋部署)
+          [ -f strategy_compare.html ] && cp strategy_compare.html _site/ || echo "strategy_compare.html 暫缺,略過"
           cp .nojekyll _site/ 2>/dev/null || touch _site/.nojekyll
           echo "Site files:"
           ls -lh _site/

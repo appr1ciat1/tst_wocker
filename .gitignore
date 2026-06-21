@@ -179,3 +179,10 @@ paper_trading.html
 paper_equity.json
 paper_signals.json
 paper_trades.json
+
+# twstk runtime artifacts (not version-controlled)
+twstk/paper/paper_state.json
+artifacts/sbl_cache.pkl
+artifacts/sbl_7yr_cache.pkl
+artifacts/sbl_balances_cache.pkl
+artifacts/margin_cache.pkl
