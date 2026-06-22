@@ -78,11 +78,9 @@ jobs:
             --gap-filter ${{ github.event.inputs.gap_filter || '1.5' }} \
             --days ${{ github.event.inputs.days || '1200' }}
 
-      - name: Paper Trading Tracker
-        if: github.event.schedule != '0 10 1 * *'
-        run: python paper_tracker.py
-
-      - name: Strategy Comparison Dashboard (v8.5 / v9 / v9+反轉)
+      # 比較頁產生器同時輸出「正確的」paper_trading.html(v9 production,自 4/22 真實引擎損益)
+      # 取代舊版 paper_tracker.py(其 live/replay 路徑都會凍結損益,已停用)
+      - name: Strategy Comparison + Paper Dashboard (v8.5 / v9 / v9+反轉)
         if: github.event.schedule != '0 10 1 * *'
         run: python -m twstk.report.compare --start 2022-01-01 --out strategy_compare.html
 
