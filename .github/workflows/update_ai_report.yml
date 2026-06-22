@@ -1,5 +1,9 @@
 name: AI Quant Trading Report v9
 
+# 讓 github-actions[bot] 能 commit/push 回 main(否則 push 會 403)
+permissions:
+  contents: write
+
 on:
   schedule:
     # 每週一到五 UTC 09:17 執行（台灣時間 17:17 收盤後，避開 GitHub Actions 整點高峰）
