@@ -108,11 +108,17 @@ jobs:
             git commit -m "📊 AI Report v9 (Hybrid Tiered) + Paper Trading ($(date -u '+%Y-%m-%d'))"
           fi
 
-          # Rebase onto latest remote without downloading the full repository history.
+          # Rebase onto latest remote。重生的報表/圖檔(HTML/PNG)無法自動 merge,
+          # 衝突時一律採「本次重生的最新版」(-X theirs),避免 rebase 卡住導致整個更新失敗。
           git fetch --no-tags --depth=50 origin main:refs/remotes/origin/main
-          git rebase --autostash origin/main
+          git rebase -X theirs --autostash origin/main || { git rebase --abort 2>/dev/null || true; git reset --hard HEAD; }
 
-          git push origin HEAD:main
+          # push;若被搶先,重抓後以本次重生檔覆蓋再 push(最多 3 次)
+          for i in 1 2 3; do
+            if git push origin HEAD:main; then break; fi
+            git fetch --no-tags --depth=50 origin main:refs/remotes/origin/main
+            git rebase -X theirs --autostash origin/main || git rebase --abort 2>/dev/null || true
+          done
 
   # 每季第一週自動跑 sweep + Monte Carlo + Walk-Forward
   quarterly-health-check:
@@ -177,8 +183,14 @@ jobs:
             git commit -m "🔄 Quarterly health check ($(date -u '+%Y-%m-%d'))"
           fi
 
-          # Rebase onto latest remote without downloading the full repository history.
+          # Rebase onto latest remote。重生的報表/圖檔(HTML/PNG)無法自動 merge,
+          # 衝突時一律採「本次重生的最新版」(-X theirs),避免 rebase 卡住導致整個更新失敗。
           git fetch --no-tags --depth=50 origin main:refs/remotes/origin/main
-          git rebase --autostash origin/main
+          git rebase -X theirs --autostash origin/main || { git rebase --abort 2>/dev/null || true; git reset --hard HEAD; }
 
-          git push origin HEAD:main
+          # push;若被搶先,重抓後以本次重生檔覆蓋再 push(最多 3 次)
+          for i in 1 2 3; do
+            if git push origin HEAD:main; then break; fi
+            git fetch --no-tags --depth=50 origin main:refs/remotes/origin/main
+            git rebase -X theirs --autostash origin/main || git rebase --abort 2>/dev/null || true
+          done
