@@ -38,6 +38,50 @@ from strategy.core_holdings import CoreHoldingsManager
 DATA_FILE = 'paper_equity.json'
 HTML_FILE = 'paper_trading.html'
 
+
+# ===================== 台股交易日曆（資料新鮮度 / 持有天數用） =====================
+_TW_CAL = None
+
+
+def _tw_calendar():
+    """取得台股交易日曆（XTAI）。失敗時回 None，呼叫端退化為平日判斷。"""
+    global _TW_CAL
+    if _TW_CAL is None:
+        try:
+            import exchange_calendars as xcals
+            _TW_CAL = xcals.get_calendar("XTAI")
+        except Exception:
+            _TW_CAL = False  # 標記為不可用
+    return _TW_CAL or None
+
+
+def is_trading_day(day: str) -> bool:
+    """day (YYYY-MM-DD) 是否為台股交易日。無日曆時退化為週一～週五。"""
+    cal = _tw_calendar()
+    ts = pd.Timestamp(day)
+    if cal is not None:
+        try:
+            return bool(cal.is_session(ts.normalize()))
+        except Exception:
+            pass
+    return ts.weekday() < 5
+
+
+def trading_days_held(entry_date: str, current_day: str) -> int:
+    """entry_date 到 current_day（含）之間的台股交易日數（持有天數），對缺跑日穩健。"""
+    cal = _tw_calendar()
+    start, end = pd.Timestamp(entry_date), pd.Timestamp(current_day)
+    if end < start:
+        return 0
+    if cal is not None:
+        try:
+            sessions = cal.sessions_in_range(start.normalize(), end.normalize())
+            return max(len(sessions), 1)
+        except Exception:
+            pass
+    return max(len(pd.bdate_range(start, end)), 1)
+
+
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE) as f:
@@ -205,23 +249,72 @@ def compute_split_equity(data: dict, prices: dict, initial_capital: float) -> Tu
     return round(core_eq, 0), round(sat_eq, 0), round(total_eq, 0)
 
 
-def extract_signals_from_orders():
-    """從 artifacts/orders_YYYYMMDD.json 擷取今日機器可讀訂單。"""
+# 訂單超過此天數視為過期，當日不再依此開新倉（避免用數週前的訊號在今天進場）。
+SIGNAL_MAX_AGE_DAYS = 5
+
+
+def _order_file_date(path):
+    m = re.search(r'orders_(\d{8})\.json', os.path.basename(path))
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), '%Y%m%d').date()
+    except ValueError:
+        return None
+
+
+def extract_signals_from_orders(run_day=None):
+    """
+    從 artifacts/orders_YYYYMMDD.json 擷取機器可讀訂單。
+
+    重點修正：
+    - 掃描「最近 SIGNAL_MAX_AGE_DAYS 天內」的所有訂單檔（不再只看最新一檔），
+      避免 t+1 訂單（今天產生、明天執行）永遠不被消化。
+    - 每檔股票優先選 execution_date == run_day 的訂單（即「昨日訊號、今日執行」），
+      其次取較新檔。實際是否進場由 _open_positions 依 execution_date == day 決定。
+    - 全部訂單檔都過期（> SIGNAL_MAX_AGE_DAYS）時，今日不開新倉並警告。
+    """
     order_files = glob.glob('artifacts/orders_*.json')
     if not order_files:
         return []
-    latest = max(order_files, key=os.path.getmtime)
-    try:
-        with open(latest, encoding='utf-8') as f:
-            payload = json.load(f)
-    except Exception as e:
-        print(f"   ⚠️ orders JSON 讀取失敗: {e}")
+
+    today = date.today()
+    fresh_files = []
+    for f in order_files:
+        fd = _order_file_date(f)
+        if fd is None or (today - fd).days <= SIGNAL_MAX_AGE_DAYS:
+            fresh_files.append(f)
+
+    if not fresh_files:
+        latest = max(order_files, key=os.path.getmtime)
+        age = (today - (_order_file_date(latest) or today)).days
+        print(f"   ⚠️ 最新訂單 {latest} 已過期 {age} 天 (>{SIGNAL_MAX_AGE_DAYS})，"
+              f"今日不依此開新倉。請先執行 ai_report.py 產生當日訊號。")
         return []
 
-    signals = []
-    for order in payload.get('orders', []):
-        if order.get('side') != 'buy':
+    merged = {}  # ticker -> order（優先 execution_date == run_day，其次較新檔）
+    for f in sorted(fresh_files):  # 舊→新
+        try:
+            with open(f, encoding='utf-8') as fh:
+                payload = json.load(fh)
+        except Exception as e:
+            print(f"   ⚠️ orders JSON 讀取失敗 {f}: {e}")
             continue
+        for order in payload.get('orders', []):
+            if order.get('side') != 'buy':
+                continue
+            t = order['ticker']
+            prev = merged.get(t)
+            if prev is None:
+                merged[t] = order
+                continue
+            cand_match = run_day is not None and order.get('execution_date') == run_day
+            prev_match = run_day is not None and prev.get('execution_date') == run_day
+            if cand_match or (cand_match == prev_match):  # 偏好當日執行；否則較新檔覆蓋
+                merged[t] = order
+
+    signals = []
+    for order in merged.values():
         signals.append({
             'ticker': order['ticker'],
             'entry': float(order.get('limit_price') or order.get('reference_close')),
@@ -232,12 +325,14 @@ def extract_signals_from_orders():
             'time_exit': order.get('time_exit'),
         })
     if signals:
-        print(f"   📦 使用 orders JSON: {latest}")
+        n_today = sum(1 for s in signals if s.get('execution_date') == run_day)
+        print(f"   📦 訂單來源: {len(fresh_files)} 檔(新鮮), 候選 {len(signals)} 筆, "
+              f"今日可執行 {n_today} 筆")
     return signals
 
-def extract_signals_from_report():
-    """從 stock_report.html 擷取今日買入信號。"""
-    order_signals = extract_signals_from_orders()
+def extract_signals_from_report(run_day=None):
+    """從 orders JSON（優先）或 stock_report.html 擷取今日買入信號。"""
+    order_signals = extract_signals_from_orders(run_day=run_day)
     if order_signals:
         return order_signals
 
@@ -270,6 +365,19 @@ def extract_signals_from_report():
             })
     return signals
 
+def _latest_market_date(reference='0050'):
+    """回傳 yfinance 最新可得的交易日（用參考標的探測），失敗回 None。"""
+    try:
+        import yfinance as yf
+        df = yf.download(f'{reference}.TW', period='7d', progress=False,
+                         auto_adjust=False, threads=False)
+        if df is None or df.empty:
+            return None
+        return df.index[-1].strftime('%Y-%m-%d')
+    except Exception:
+        return None
+
+
 def update_tracker(data):
     """主要更新邏輯：追蹤持倉、結算已平倉、記錄新信號。"""
     today = date.today().isoformat()
@@ -281,12 +389,24 @@ def update_tracker(data):
     print(f"   保留現金: {reserve_cash:,.0f} ({RESERVE_RATIO:.0%} 本金)")
     print(f"   持倉檔數: {len(data['positions'])}")
 
+    # 防呆 1：非交易日不更新（週末 / 台股休市日）
+    if not is_trading_day(today):
+        print(f"   ⏸️ {today} 非台股交易日，跳過更新")
+        return
+
+    # 防呆 2：同日只更新一次（避免重複計入）
     if data['equity_curve'] and data['equity_curve'][-1].get('date') == today:
         print(f"   ⚠️ 今日已更新過，跳過")
         return
 
+    # 防呆 3：行情資料新鮮度 —— 今日資料尚未產生就不要用昨日 bar 當今日記錄
+    market_date = _latest_market_date()
+    if market_date is not None and market_date < today:
+        print(f"   ⏸️ 行情最新僅到 {market_date}（今日 {today} 資料未就緒），跳過更新避免記錄過期資料")
+        return
+
     all_tickers = list(data['positions'].keys())
-    signals = extract_signals_from_report()
+    signals = extract_signals_from_report(run_day=today)
     signal_tickers = [s['ticker'] for s in signals]
     bars = get_current_bars(list(set(all_tickers + signal_tickers)))
     _process_trading_day(data, today, bars, signals, verbose=True)
@@ -405,7 +525,12 @@ def _apply_rotation_trims(data, bars, tiered_for_sizing, verbose=True):
 def _close_positions(data, day, bars, verbose=True):
     to_close = []
     for ticker, pos in data['positions'].items():
-        pos['day_count'] = pos.get('day_count', 0) + 1
+        # 以實際交易日數計算持有天數（對缺跑日穩健；非單純每次 +1）
+        entry_d = pos.get('entry_date')
+        if entry_d:
+            pos['day_count'] = max(trading_days_held(entry_d, day) - 1, 0)
+        else:
+            pos['day_count'] = pos.get('day_count', 0) + 1
         bar = bars.get(ticker)
         if bar is None or bar.get('close') is None:
             continue
@@ -479,7 +604,9 @@ def _open_positions(data, day, bars, signals, tiered_for_sizing, verbose=True):
         if ticker in data['positions']:
             continue
         execution_date = sig.get('execution_date')
-        if execution_date and execution_date > day:
+        # 僅在「指定執行日 == 今日」才進場（t+1 open）。
+        # 未來日 → 等到那天；過去日 → 視為過期不補單（避免用舊訊號舊限價進場）。
+        if execution_date and execution_date != day:
             continue
         book_check = sig.get('book') or classify_book(ticker)
         if (book_check == 'satellite'
@@ -572,8 +699,12 @@ def _open_positions(data, day, bars, signals, tiered_for_sizing, verbose=True):
 def _finalize_day_equity(data, day, bars, to_close):
     prices = {ticker: bar['close'] for ticker, bar in bars.items() if bar.get('close') is not None}
     for ticker, pos in data['positions'].items():
-        if ticker not in prices:
-            prices[ticker] = pos['entry']
+        if ticker in prices:
+            # 記住最後成交收盤，作為日後資料缺口時的 MTM 回退值
+            pos['last_close'] = prices[ticker]
+        else:
+            # 當日無報價：用最後已知收盤估值，而非進場價（避免 MTM 失真）
+            prices[ticker] = pos.get('last_close', pos['entry'])
 
     core_eq, sat_eq, total_equity = compute_split_equity(data, prices, data['initial_capital'])
     data['equity_curve'].append({
@@ -764,9 +895,10 @@ def _seed_replay_equity_warmup(data: dict, start_date: str,
                 'capital': round(scaled, 0),
                 'n_positions': 0,
                 'n_closed_today': 0,
+                'warmup': True,   # 僅供波動預測暖機，不計入顯示與績效統計
             })
-            data['core_equity_curve'].append({'date': day, 'equity': round(scaled * 0.25, 0)})
-            data['sat_equity_curve'].append({'date': day, 'equity': round(scaled * 0.75, 0)})
+            data['core_equity_curve'].append({'date': day, 'equity': round(scaled * 0.25, 0), 'warmup': True})
+            data['sat_equity_curve'].append({'date': day, 'equity': round(scaled * 0.75, 0), 'warmup': True})
         print(f"   📈 權益暖機: {len(warmup)} 日 (來自 {os.path.basename(equity_path)})")
     except Exception as exc:
         print(f"   ⚠️ 權益暖機失敗: {exc}")
@@ -864,7 +996,8 @@ def generate_html(data):
     """產出 paper trading 績效網頁。"""
     today = date.today().isoformat()
     initial = data['initial_capital']
-    equity_curve = data['equity_curve']
+    # 顯示與績效統計只用「正式 paper」資料，排除 vol 暖機種子（warmup 點）。
+    equity_curve = [p for p in data['equity_curve'] if not p.get('warmup')]
 
     if not equity_curve:
         return
@@ -898,8 +1031,8 @@ def generate_html(data):
     ann_return = total_return * (252 / max(n_days, 1))
 
     # ===== v9 Hybrid Tiered: 準備雙 book 曲線與 tiered 資料 =====
-    core_curve = data.get('core_equity_curve', []) or []
-    sat_curve = data.get('sat_equity_curve', []) or []
+    core_curve = [p for p in (data.get('core_equity_curve', []) or []) if not p.get('warmup')]
+    sat_curve = [p for p in (data.get('sat_equity_curve', []) or []) if not p.get('warmup')]
     last_tiered = data.get('last_tiered', {}) or {}
 
     core_latest = core_curve[-1]['equity'] if core_curve else latest_equity * 0.25

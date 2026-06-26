@@ -39,6 +39,7 @@ _EXPORTS = {
     "fetch_inst_rankings": "twstk.data.institutional",
     "fetch_stock_three_inst_latest": "twstk.data.institutional",
     "build_inst_flow_df": "twstk.data.institutional",
+    "build_inst_flow_windows": "twstk.data.institutional",
     "get_inst_flow_for_signals": "twstk.data.institutional",
     "fetch_broker_ranking": "twstk.data.institutional",
     "fetch_broker_stats": "twstk.data.institutional",

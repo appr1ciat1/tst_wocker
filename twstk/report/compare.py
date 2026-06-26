@@ -62,25 +62,20 @@ def build_data(start_date, end_date, universe_size=60):
                       market_close=mc, universe_mask=um)
 
 
-def strategy_run(name, data):
-    """回傳 (equity Series, trades_df)。起始資金 CAPITAL。"""
+def strategy_equity(name, data):
+    """回傳該策略的 equity Series(起始資金 CAPITAL)。"""
     strat = get_strategy(name)
     exec_cfg = ExecConfig(initial_capital=CAPITAL)
     if isinstance(strat, EngineStrategy):
-        td, ed = strat.run_engine(data, exec_cfg)
-        return ed["Equity"], td
+        _, ed = strat.run_engine(data, exec_cfg)
+        return ed["Equity"]
     if isinstance(strat, WeightStrategy):
         w = strat.target_weights(data)
         pcfg = PortfolioConfig(initial_capital=CAPITAL)
         st = simulate_weights(w, data.open, data.close, pcfg,
                               start=data.close.index[60].strftime("%Y-%m-%d"))
-        import pandas as _pd
-        return equity_dataframe(st)["Equity"], _pd.DataFrame(st.get("trades", []))
+        return equity_dataframe(st)["Equity"]
     raise TypeError(name)
-
-
-def strategy_equity(name, data):
-    return strategy_run(name, data)[0]
 
 
 def blend_returns(eq_a, eq_b, wa, wb):
@@ -114,7 +109,7 @@ def generate(start_date, out_path):
     data = build_data(start_date, end_date)
 
     eq85 = strategy_equity("momentum_v85", data)
-    eq9, tr9 = strategy_run("hybrid_tiered_v9", data)   # v9 = production paper
+    eq9 = strategy_equity("hybrid_tiered_v9", data)
     eqrev = strategy_equity("reversal_20d", data)
     eqblend = blend_returns(eq9, eqrev.reindex(eq9.index).ffill(), 0.8, 0.2)
 
@@ -135,17 +130,6 @@ def generate(start_date, out_path):
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"✅ 已輸出 {out_path}")
-
-    # 同時輸出正確的 paper_trading.html(production = v9，自 4/22 真實引擎損益，
-    # 取代壞掉、會凍結的 legacy paper_tracker 版本)
-    p_eq = normalize(eq9, paper_idx)
-    p_dates = paper_dates
-    p_vals = [round(float(x), 0) for x in p_eq.reindex(paper_idx).ffill().values]
-    p_m = _metrics(p_eq)
-    paper_html = _paper_html(p_dates, p_vals, p_m, tr9, end_date)
-    with open("paper_trading.html", "w", encoding="utf-8") as f:
-        f.write(paper_html)
-    print("✅ 已輸出 paper_trading.html（v9 production，自 4/22）")
     # 主控台摘要
     for title, mets in [("回測", bt_mets), ("Paper(自4/22)", paper_mets)]:
         print(f"\n[{title}]")
@@ -224,64 +208,6 @@ new Chart(document.getElementById('btChart'),{{type:'line',
 data:{{labels:{json.dumps(btd)},datasets:{_datasets(btc)}}},options:opt()}});
 new Chart(document.getElementById('ppChart'),{{type:'line',
 data:{{labels:{json.dumps(ppd)},datasets:{_datasets(ppc)}}},options:opt()}});
-</script></body></html>"""
-
-
-def _paper_html(dates, vals, m, trades_df, end_date):
-    """正確的 paper_trading.html：production = v9，自 4/22 真實引擎損益。"""
-    rows = ""
-    ntr = 0
-    try:
-        if trades_df is not None and len(trades_df) and "Exit_Date" in trades_df.columns:
-            t = trades_df[trades_df["Exit_Date"] >= PAPER_START].sort_values("Exit_Date")
-            ntr = len(t)
-            for _, r in t.tail(25).iloc[::-1].iterrows():
-                ret = float(r.get("Return_Pct", 0)) * 100
-                col = "#00ff88" if ret >= 0 else "#ff5555"
-                rows += (f"<tr><td>{r.get('Ticker')}</td><td>{r.get('Entry_Date')}</td>"
-                         f"<td>{r.get('Exit_Date')}</td><td>{r.get('Entry_Price')}</td>"
-                         f"<td>{r.get('Exit_Price')}</td>"
-                         f"<td style='color:{col}'>{ret:+.1f}%</td>"
-                         f"<td>{r.get('Reason','')}</td></tr>")
-    except Exception:
-        pass
-    cur = vals[-1] if vals else CAPITAL
-    return f"""<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Paper Trading — v9 production</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-<style>
-body{{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',sans-serif;margin:0;padding:20px}}
-h1{{font-size:1.4rem}} .sub{{color:#8b949e;font-size:.85rem}}
-.card{{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px;margin:14px 0}}
-.k{{display:inline-block;margin-right:28px}} .k b{{font-size:1.5rem}}
-table{{width:100%;border-collapse:collapse;font-size:.88rem}}
-th,td{{padding:6px 10px;text-align:right;border-bottom:1px solid #21262d}}
-th:first-child,td:first-child{{text-align:left}} th{{color:#8b949e}}
-canvas{{max-height:360px}}
-</style></head><body>
-<h1>📒 Paper Trading — v9 production（自 {PAPER_START}）</h1>
-<div class="sub">資料更新至 {end_date}｜初始資金 {CAPITAL:,}｜每交易日自動更新</div>
-<div class="card">
-  <span class="k">總報酬 <b style="color:{'#00ff88' if m['total']>=0 else '#ff5555'}">{m['total']:+.1f}%</b></span>
-  <span class="k">目前權益 <b>{cur:,.0f}</b></span>
-  <span class="k">最大回撤 <b>{m['mdd']:.1f}%</b></span>
-  <span class="k">Sharpe <b>{m['sharpe']:.2f}</b></span>
-  <span class="k">平倉筆數 <b>{ntr}</b></span>
-</div>
-<div class="card"><canvas id="eq"></canvas></div>
-<div class="card"><h3 style="margin-top:0">近期平倉(最多 25 筆)</h3>
-<table><thead><tr><th>代號</th><th>進場日</th><th>出場日</th><th>進</th><th>出</th><th>報酬</th><th>原因</th></tr></thead>
-<tbody>{rows or '<tr><td colspan=7 style="text-align:center;color:#8b949e">尚無平倉交易</td></tr>'}</tbody></table></div>
-<div class="sub">本頁為 v9（Hybrid Tiered）自 4/22 的真實引擎模擬損益,取代舊版會凍結的 paper_tracker。
-僅供研究,非投資建議。</div>
-<script>
-new Chart(document.getElementById('eq'),{{type:'line',
-data:{{labels:{json.dumps(dates)},datasets:[{{label:'v9 權益',data:{json.dumps(vals)},
-borderColor:'#00c2ff',borderWidth:2,pointRadius:0,tension:0.1}}]}},
-options:{{responsive:true,plugins:{{legend:{{labels:{{color:'#e6edf3'}}}}}},
-scales:{{x:{{ticks:{{color:'#8b949e',maxTicksLimit:10}},grid:{{color:'#21262d'}}}},
-y:{{ticks:{{color:'#8b949e'}},grid:{{color:'#21262d'}}}}}}}}}});
 </script></body></html>"""
 
 

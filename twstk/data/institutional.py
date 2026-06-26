@@ -34,7 +34,7 @@ DEFAULT_BASE_URL = (
 BASE_URL = os.environ.get("TW_INST_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
 
 TIMEOUT = 15
-WINDOWS = (5, 20, 60, 120)  # 新版支援的變化視窗
+WINDOWS = (5, 10, 20, 60, 120)  # 10 日可由 timeseries 的持股比率補算
 
 
 def _fetch_json(url):
@@ -76,11 +76,26 @@ def build_inst_flow_df(tickers, close_df, window=20, verbose=True):
     inst_flow_df : pd.DataFrame   三大法人持股「變化」矩陣（依 window）
     inst_ratio_df : pd.DataFrame  三大法人持股「比重」矩陣
     """
-    if verbose:
-        print(f"🏛️ [新版] 抓取 {len(tickers)} 檔三大法人資料 (window={window})...")
+    flow_by_window, inst_ratio_df = build_inst_flow_windows(
+        tickers, close_df, windows=(window,), verbose=verbose,
+    )
+    return flow_by_window.get(window), inst_ratio_df
 
-    change_key = f"three_inst_ratio_change_{window}"
-    flow_data, ratio_data = {}, {}
+
+def build_inst_flow_windows(tickers, close_df, windows=(5, 10, 20), verbose=True):
+    """
+    一次下載 timeseries，產生多個三大法人持股變化窗口。
+
+    網站 timeseries 常見欄位為 5/20/60/120 日變化；10 日變化若不存在，
+    由 three_inst_ratio 的日序列以 diff(10) 補算，避免把 10 日誤用成 20 日。
+    """
+    windows = tuple(int(w) for w in windows)
+    if verbose:
+        joined = ",".join(str(w) for w in windows)
+        print(f"🏛️ [新版] 抓取 {len(tickers)} 檔三大法人資料 (windows={joined})...")
+
+    flow_data_by_window = {w: {} for w in windows}
+    ratio_data = {}
     success = failed = 0
 
     for i, ticker in enumerate(tickers):
@@ -97,28 +112,36 @@ def build_inst_flow_df(tickers, close_df, window=20, verbose=True):
                 date_idx = pd.Timestamp(dt)
             except Exception:
                 continue
-            # 新版同時提供多視窗變化欄位；缺該視窗則退回 20 日再退回 0
-            change = record.get(change_key)
-            if change is None:
-                change = record.get("three_inst_ratio_change_20", 0.0)
-            ratio = record.get("three_inst_ratio", 0.0)
-            flow_data.setdefault(date_idx, {})[ticker] = change
+
+            ratio = record.get("three_inst_ratio", np.nan)
             ratio_data.setdefault(date_idx, {})[ticker] = ratio
+            for window in windows:
+                change = record.get(f"three_inst_ratio_change_{window}")
+                if change is not None:
+                    flow_data_by_window[window].setdefault(date_idx, {})[ticker] = change
+
         if verbose and (i + 1) % 10 == 0:
             print(f"   📦 已處理 {i + 1}/{len(tickers)} 檔...")
 
     if verbose:
         print(f"   ✅ 三大法人: {success} 檔成功, {failed} 檔失敗")
 
-    if not flow_data:
+    if not ratio_data:
         empty = pd.DataFrame(np.nan, index=close_df.index, columns=close_df.columns)
-        return empty, empty.copy()
+        return {w: empty.copy() for w in windows}, empty.copy()
 
-    inst_flow_df = pd.DataFrame.from_dict(flow_data, orient="index")
     inst_ratio_df = pd.DataFrame.from_dict(ratio_data, orient="index")
-    inst_flow_df = inst_flow_df.reindex(index=close_df.index, columns=close_df.columns)
     inst_ratio_df = inst_ratio_df.reindex(index=close_df.index, columns=close_df.columns)
-    return inst_flow_df, inst_ratio_df
+    ratio_filled = inst_ratio_df.ffill()
+
+    flow_by_window = {}
+    for window in windows:
+        raw = pd.DataFrame.from_dict(flow_data_by_window[window], orient="index")
+        raw = raw.reindex(index=close_df.index, columns=close_df.columns)
+        computed = ratio_filled.diff(window)
+        flow_by_window[window] = raw.combine_first(computed)
+
+    return flow_by_window, inst_ratio_df
 
 
 def get_inst_flow_for_signals(tickers, window=20):

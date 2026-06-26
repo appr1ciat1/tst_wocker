@@ -16,6 +16,7 @@ from twstk.data.institutional import (  # noqa: F401
     fetch_inst_rankings,
     fetch_stock_three_inst_latest,
     build_inst_flow_df,
+    build_inst_flow_windows,
     get_inst_flow_for_signals,
     # 新版新增：分點券商
     fetch_broker_ranking,
@@ -31,6 +32,7 @@ __all__ = [
     "fetch_inst_rankings",
     "fetch_stock_three_inst_latest",
     "build_inst_flow_df",
+    "build_inst_flow_windows",
     "get_inst_flow_for_signals",
     "fetch_broker_ranking",
     "fetch_broker_stats",
