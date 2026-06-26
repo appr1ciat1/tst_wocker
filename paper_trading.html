@@ -1,37 +1,340 @@
-<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Paper Trading — v9 production</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-<style>
-body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',sans-serif;margin:0;padding:20px}
-h1{font-size:1.4rem} .sub{color:#8b949e;font-size:.85rem}
-.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px;margin:14px 0}
-.k{display:inline-block;margin-right:28px} .k b{font-size:1.5rem}
-table{width:100%;border-collapse:collapse;font-size:.88rem}
-th,td{padding:6px 10px;text-align:right;border-bottom:1px solid #21262d}
-th:first-child,td:first-child{text-align:left} th{color:#8b949e}
-canvas{max-height:360px}
-</style></head><body>
-<h1>📒 Paper Trading — v9 production（自 2026-04-22）</h1>
-<div class="sub">資料更新至 2026-06-25｜初始資金 200,000｜每交易日自動更新</div>
-<div class="card">
-  <span class="k">總報酬 <b style="color:#00ff88">+32.4%</b></span>
-  <span class="k">目前權益 <b>264,800</b></span>
-  <span class="k">最大回撤 <b>-7.8%</b></span>
-  <span class="k">Sharpe <b>4.58</b></span>
-  <span class="k">平倉筆數 <b>16</b></span>
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paper Trading v9 (Hybrid Tiered) — 2026-06-26</title>
+    <meta name="description" content="TW Stocker v9 Hybrid Tiered Paper Trading 實時績效追蹤（雙 book + Tiered scales + Risk-Adjusted）">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #e2e8f0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 {
+            font-size: 1.8rem;
+            background: linear-gradient(90deg, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 6px;
+        }
+        .subtitle { color: #94a3b8; margin-bottom: 24px; font-size: 0.9rem; }
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        .metric {
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(100, 116, 139, 0.3);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+        .metric .label { color: #94a3b8; font-size: 0.75rem; text-transform: uppercase; }
+        .metric .value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; }
+        .metric .value.green { color: #4ade80; }
+        .metric .value.red { color: #f87171; }
+        .metric .value.blue { color: #60a5fa; }
+        .chart-box {
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(100, 116, 139, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+        .chart-box h2 { font-size: 1.1rem; margin-bottom: 12px; color: #cbd5e1; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        th {
+            text-align: left;
+            padding: 8px 10px;
+            border-bottom: 2px solid #334155;
+            color: #94a3b8;
+            font-weight: 600;
+        }
+        td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #1e293b;
+        }
+        tr:hover { background: rgba(100, 116, 139, 0.1); }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 700;
+        }
+        .badge-live { background: #22c55e33; color: #4ade80; }
+        .disclaimer {
+            margin-top: 24px;
+            padding: 14px;
+            background: rgba(251, 191, 36, 0.08);
+            border: 1px solid rgba(251, 191, 36, 0.2);
+            border-radius: 8px;
+            font-size: 0.75rem;
+            color: #fbbf24;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>📈 Paper Trading v9 <span style="font-size:0.6em;color:#a78bfa">Hybrid Tiered Risk Budgeting</span></h1>
+    <p class="subtitle">
+        <span class="badge badge-live">● LIVE</span>
+        起始日 2026-04-22 | 更新 2026-06-26 | 初始資金 200,000 | Core-Satellite 分層 + Portfolio Vol Targeting (目標 15%)
+    </p>
+
+    <div class="metrics">
+        <div class="metric">
+            <div class="label">總權益</div>
+            <div class="value green">216,349</div>
+        </div>
+        <div class="metric">
+            <div class="label">總報酬</div>
+            <div class="value green">+8.2%</div>
+        </div>
+        <div class="metric">
+            <div class="label">Core 權益</div>
+            <div class="value blue">0</div>
+        </div>
+        <div class="metric">
+            <div class="label">Satellite 權益</div>
+            <div class="value blue">216,349</div>
+        </div>
+        <div class="metric">
+            <div class="label">最大回撤</div>
+            <div class="value red">-25.4%</div>
+        </div>
+        <div class="metric">
+            <div class="label">勝率 / 交易數</div>
+            <div class="value blue">43% / 7</div>
+        </div>
+        <div class="metric">
+            <div class="label">Profit Factor</div>
+            <div class="value green">1.36</div>
+        </div>
+        <div class="metric">
+            <div class="label">持倉數</div>
+            <div class="value blue">0</div>
+        </div>
+    </div>
+
+    <!-- v9 Tiered Risk Summary -->
+    <div class="chart-box" style="border-left:4px solid #a78bfa; background:rgba(167,139,250,0.06);">
+        <h2>🛡️ Hybrid Tiered Risk Budgeting (v9) — Portfolio Vol Target + Core/Satellite</h2>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin:12px 0;">
+            <div class="metric" style="min-width:130px;">
+                <div class="label">預測組合年化波動</div>
+                <div class="value" style="color:#fbbf24;">32.8%</div>
+            </div>
+            <div class="metric" style="min-width:130px;">
+                <div class="label">目標 / Overall Scale</div>
+                <div class="value" style="color:#60a5fa;">15% / <b>0.458</b></div>
+            </div>
+            <div class="metric" style="min-width:130px;">
+                <div class="label">Core Rotation</div>
+                <div class="value green">1.218 <span style="font-size:0.7em;color:#94a3b8;">(買滿×輪動)</span></div>
+            </div>
+            <div class="metric" style="min-width:130px;">
+                <div class="label">Sat Rotation</div>
+                <div class="value" style="color:#f87171;">0.541 <span style="font-size:0.7em;color:#94a3b8;">(買滿×輪動)</span></div>
+            </div>
+            <div class="metric" style="min-width:130px;">
+                <div class="label">狀態</div>
+                <div class="value" style="font-size:1.1rem;">🔴 積極去風險</div>
+            </div>
+        </div>
+        <div style="font-size:0.85rem; color:#cbd5e1; background:rgba(15,23,42,0.6); padding:8px 12px; border-radius:6px;">
+            💡 資金輪動 [crisis]：高波動→Sat縮倉資金轉Core(boost 1.22)；回落→Core獲利了結回流Sat(boost 0.54)。<br>
+            波動回落賣 Core alpha → 資金輪動 Satellite 動能（12日加碼視窗）。目標波動 15%。
+        </div>
+    </div>
+
+    <div class="chart-box">
+        <h2>權益曲線（v9: Total / Core / Satellite / Risk-Adjusted Tiered）</h2>
+        <canvas id="equityChart" height="90"></canvas>
+        <div style="font-size:0.7rem;color:#64748b;margin-top:4px;">藍=Total | 綠=Core(保護) | 紫=Sat | 橙=Risk-Adjusted (tiered de-lever 模擬)</div>
+    </div>
+
+    <div class="chart-box">
+        <h2>🔓 目前持倉（v9 雙 Book）</h2>
+        <table>
+            <tr><th>股票</th><th>Book</th><th>進場價</th><th>停利</th><th>停損</th><th>進場日</th><th>持有</th></tr>
+            <tr><td colspan="7" style="text-align:center;color:#888">目前無持倉</td></tr>
+        </table>
+        <div style="margin-top:8px;font-size:0.75rem;color:#94a3b8;">🟢 = Core（高信心、較保護）　🔵 = Satellite（戰術動能，嚴格受 vol target 約束）</div>
+    </div>
+
+    <div class="chart-box">
+        <h2>📋 近期交易（最近 30 筆） — 含 Book 標記</h2>
+        <table>
+            <tr><th>日期</th><th>股票 / Book</th><th>進場</th><th>出場</th><th>損益</th><th>原因</th><th>持有</th></tr>
+            
+        <tr>
+            <td>2026-06-08</td>
+            <td><b>6116</b> 🔵</td>
+            <td>21.5</td>
+            <td>16.6</td>
+            <td style="color:#f87171;font-weight:700">-22.7%</td>
+            <td>SL</td>
+            <td>3天</td>
+        </tr>
+        <tr>
+            <td>2026-06-08</td>
+            <td><b>6239</b> 🔵</td>
+            <td>382.0</td>
+            <td>304.5</td>
+            <td style="color:#f87171;font-weight:700">-20.3%</td>
+            <td>SL</td>
+            <td>5天</td>
+        </tr>
+        <tr>
+            <td>2026-06-05</td>
+            <td><b>3231</b> 🔵</td>
+            <td>193.0</td>
+            <td>171.6</td>
+            <td style="color:#f87171;font-weight:700">-11.1%</td>
+            <td>SL</td>
+            <td>2天</td>
+        </tr>
+        <tr>
+            <td>2026-06-05</td>
+            <td><b>6770</b> 🔵</td>
+            <td>93.2</td>
+            <td>77.0</td>
+            <td style="color:#f87171;font-weight:700">-17.4%</td>
+            <td>SL</td>
+            <td>4天</td>
+        </tr>
+        <tr>
+            <td>2026-06-03</td>
+            <td><b>6116</b> 🔵</td>
+            <td>18.2</td>
+            <td>21.9</td>
+            <td style="color:#4ade80;font-weight:700">+20.2%</td>
+            <td>TP</td>
+            <td>2天</td>
+        </tr>
+        <tr>
+            <td>2026-05-19</td>
+            <td><b>6285</b> 🔵</td>
+            <td>217.0</td>
+            <td>290.5</td>
+            <td style="color:#4ade80;font-weight:700">+33.9%</td>
+            <td>TP</td>
+            <td>16天</td>
+        </tr>
+        <tr>
+            <td>2026-05-05</td>
+            <td><b>3037</b> 🔵</td>
+            <td>775.0</td>
+            <td>941.6</td>
+            <td style="color:#4ade80;font-weight:700">+21.5%</td>
+            <td>TP</td>
+            <td>6天</td>
+        </tr>
+        </table>
+    </div>
+
+    <div class="disclaimer">
+        ⚠️ <b>免責聲明：</b>此為 Paper Trading 模擬績效，非真實交易。歷史模擬不代表未來報酬。
+        v9 Hybrid Tiered：Vol Target 15%，Core/Sat 買滿後高波動才輪動，非永久壓縮 alpha。
+        所有 scale 與 Core 選取決策寫入 experiment_registry。策略 alpha 維持 v8.5 + SR v2 驗證結果。投資有風險，決策請自行負責。
+    </div>
+
+    <div style="margin-top:12px;font-size:0.75rem;color:#64748b;">
+        Core 結構性龍頭示例：2330 (TSMC)、2454 等（詳見 strategy/core_holdings.py）。Core 基礎曝險較高、尾部風險容忍較寬。
+    </div>
 </div>
-<div class="card"><canvas id="eq"></canvas></div>
-<div class="card"><h3 style="margin-top:0">近期平倉(最多 25 筆)</h3>
-<table><thead><tr><th>代號</th><th>進場日</th><th>出場日</th><th>進</th><th>出</th><th>報酬</th><th>原因</th></tr></thead>
-<tbody><tr><td>2454</td><td>2026-05-25</td><td>2026-06-23</td><td>4245.0</td><td>4535.0</td><td style='color:#00ff88'>+6.2%</td><td>⚪ 時間到期</td></tr><tr><td>3481</td><td>2026-06-05</td><td>2026-06-22</td><td>52.1</td><td>69.4</td><td style='color:#00ff88'>+32.4%</td><td>🟢 停利</td></tr><tr><td>2344</td><td>2026-06-05</td><td>2026-06-18</td><td>169.0</td><td>217.5</td><td style='color:#00ff88'>+28.0%</td><td>🟢 停利</td></tr><tr><td>2882</td><td>2026-06-08</td><td>2026-06-16</td><td>97.8</td><td>108.78</td><td style='color:#00ff88'>+10.6%</td><td>🟢 停利</td></tr><tr><td>2327</td><td>2026-06-05</td><td>2026-06-12</td><td>702.96</td><td>919.0</td><td style='color:#00ff88'>+30.0%</td><td>🟢 停利</td></tr><tr><td>5274O</td><td>2026-04-28</td><td>2026-05-27</td><td>15800.0</td><td>18230.0</td><td style='color:#00ff88'>+14.7%</td><td>⚪ 時間到期</td></tr><tr><td>2368</td><td>2026-04-28</td><td>2026-05-27</td><td>1400.09</td><td>1365.34</td><td style='color:#ff5555'>-3.0%</td><td>⚪ 時間到期</td></tr><tr><td>2383</td><td>2026-04-28</td><td>2026-05-26</td><td>4650.0</td><td>5635.0</td><td style='color:#00ff88'>+20.5%</td><td>🟢 停利</td></tr><tr><td>3037</td><td>2026-04-28</td><td>2026-05-26</td><td>864.0</td><td>1036.0</td><td style='color:#00ff88'>+19.2%</td><td>🟢 停利</td></tr><tr><td>2454</td><td>2026-05-07</td><td>2026-05-25</td><td>3430.0</td><td>4245.0</td><td style='color:#00ff88'>+23.0%</td><td>🟢 停利</td></tr><tr><td>2308</td><td>2026-04-23</td><td>2026-05-22</td><td>2089.08</td><td>2084.1</td><td style='color:#ff5555'>-0.8%</td><td>⚪ 時間到期</td></tr><tr><td>6415</td><td>2026-04-28</td><td>2026-05-14</td><td>420.0</td><td>505.8</td><td style='color:#00ff88'>+19.7%</td><td>🟢 停利</td></tr><tr><td>6285</td><td>2026-04-28</td><td>2026-05-12</td><td>212.5</td><td>281.8</td><td style='color:#00ff88'>+31.8%</td><td>🟢 停利</td></tr><tr><td>3443</td><td>2026-04-28</td><td>2026-05-05</td><td>3996.79</td><td>4863.84</td><td style='color:#00ff88'>+21.0%</td><td>🟢 停利</td></tr><tr><td>2454</td><td>2026-04-27</td><td>2026-05-05</td><td>2470.0</td><td>3155.0</td><td style='color:#00ff88'>+27.0%</td><td>🟢 停利</td></tr><tr><td>2308</td><td>2026-04-13</td><td>2026-04-23</td><td>1721.0</td><td>2089.08</td><td style='color:#00ff88'>+20.7%</td><td>🟢 停利</td></tr></tbody></table></div>
-<div class="sub">本頁為 v9（Hybrid Tiered）自 4/22 的真實引擎模擬損益,取代舊版會凍結的 paper_tracker。
-僅供研究,非投資建議。</div>
+
 <script>
-new Chart(document.getElementById('eq'),{type:'line',
-data:{labels:["2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-04", "2026-05-05", "2026-05-06", "2026-05-07", "2026-05-08", "2026-05-11", "2026-05-12", "2026-05-13", "2026-05-14", "2026-05-15", "2026-05-18", "2026-05-19", "2026-05-20", "2026-05-21", "2026-05-22", "2026-05-25", "2026-05-26", "2026-05-27", "2026-05-28", "2026-05-29", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24"],datasets:[{label:'v9 權益',data:[200000.0, 199660.0, 200767.0, 199752.0, 201564.0, 199879.0, 205342.0, 215473.0, 219565.0, 220078.0, 222889.0, 217401.0, 226401.0, 227389.0, 224721.0, 226382.0, 218944.0, 217152.0, 214197.0, 213167.0, 221935.0, 230132.0, 236807.0, 238005.0, 240681.0, 239083.0, 238388.0, 240090.0, 239882.0, 240021.0, 239222.0, 239912.0, 226788.0, 234590.0, 221956.0, 225541.0, 235423.0, 243838.0, 248561.0, 254228.0, 261315.0, 267912.0, 261807.0, 264800.0],
-borderColor:'#00c2ff',borderWidth:2,pointRadius:0,tension:0.1}]},
-options:{responsive:true,plugins:{legend:{labels:{color:'#e6edf3'}}},
-scales:{x:{ticks:{color:'#8b949e',maxTicksLimit:10},grid:{color:'#21262d'}},
-y:{ticks:{color:'#8b949e'},grid:{color:'#21262d'}}}}});
-</script></body></html>
+const ctx = document.getElementById('equityChart').getContext('2d');
+new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: ["2026-01-14", "2026-01-15", "2026-01-16", "2026-01-19", "2026-01-20", "2026-01-21", "2026-01-22", "2026-01-23", "2026-01-26", "2026-01-27", "2026-01-28", "2026-01-29", "2026-01-30", "2026-02-02", "2026-02-03", "2026-02-04", "2026-02-05", "2026-02-06", "2026-02-09", "2026-02-10", "2026-02-11", "2026-02-23", "2026-02-24", "2026-02-25", "2026-02-26", "2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05", "2026-03-06", "2026-03-09", "2026-03-10", "2026-03-11", "2026-03-12", "2026-03-13", "2026-03-16", "2026-03-17", "2026-03-18", "2026-03-19", "2026-03-20", "2026-03-23", "2026-03-24", "2026-03-25", "2026-03-26", "2026-03-27", "2026-03-30", "2026-03-31", "2026-04-01", "2026-04-02", "2026-04-07", "2026-04-08", "2026-04-09", "2026-04-10", "2026-04-13", "2026-04-14", "2026-04-15", "2026-04-16", "2026-04-17", "2026-04-20", "2026-04-21", "2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-04", "2026-05-05", "2026-05-06", "2026-05-07", "2026-05-08", "2026-05-11", "2026-05-12", "2026-05-13", "2026-05-14", "2026-05-15", "2026-05-18", "2026-05-19", "2026-05-20", "2026-05-21", "2026-05-22", "2026-05-25", "2026-05-26", "2026-05-27", "2026-05-28", "2026-05-29", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-22", "2026-06-26"],
+        datasets: [
+            {
+                label: 'Total (合併)',
+                data: [149225.0, 150494.0, 156820.0, 163560.0, 161786.0, 157631.0, 161860.0, 161087.0, 164678.0, 165441.0, 165187.0, 164424.0, 164233.0, 163025.0, 164614.0, 164042.0, 159061.0, 154894.0, 158294.0, 156949.0, 157654.0, 161612.0, 166537.0, 168468.0, 167797.0, 166171.0, 164001.0, 156113.0, 164076.0, 164307.0, 151717.0, 158081.0, 167330.0, 168200.0, 170298.0, 171867.0, 179978.0, 179240.0, 181772.0, 181363.0, 178615.0, 177801.0, 181958.0, 183132.0, 184342.0, 184950.0, 182901.0, 183604.0, 183604.0, 183604.0, 183604.0, 183035.0, 184242.0, 184309.0, 184443.0, 184912.0, 189008.0, 191072.0, 194623.0, 200000.0, 200000, 200000, 197701.0, 204388.0, 205330.0, 201016.0, 211144.0, 218620.0, 224154.0, 224154.0, 233722.0, 230186.0, 234970.0, 244538.0, 239754.0, 236218.0, 235386.0, 246202.0, 247418.0, 247418.0, 247418.0, 247418.0, 247418.0, 247418.0, 247418.0, 247418.0, 247418.0, 240921.0, 243636.0, 248899.0, 239475.0, 227362.0, 216349.0, 216349.0, 216349.0, 216349.0, 216349.0, 216349.0, 216349.0, 216349.0],
+                borderColor: '#60a5fa',
+                backgroundColor: 'rgba(96, 165, 250, 0.12)',
+                fill: true,
+                tension: 0.25,
+                pointRadius: 1.5,
+                borderWidth: 2.5,
+            },
+            {
+                label: 'Core (高信心，保護)',
+                data: [37306.0, 37623.0, 39205.0, 40890.0, 40446.0, 39408.0, 40465.0, 40272.0, 41169.0, 41360.0, 41297.0, 41106.0, 41058.0, 40756.0, 41154.0, 41011.0, 39765.0, 38724.0, 39573.0, 39237.0, 39414.0, 40403.0, 41634.0, 42117.0, 41949.0, 41543.0, 41000.0, 39028.0, 41019.0, 41077.0, 37929.0, 39520.0, 41833.0, 42050.0, 42575.0, 42967.0, 44995.0, 44810.0, 45443.0, 45341.0, 44654.0, 44450.0, 45489.0, 45783.0, 46085.0, 46237.0, 45725.0, 45901.0, 45901.0, 45901.0, 45901.0, 45759.0, 46060.0, 46077.0, 46111.0, 46228.0, 47252.0, 47768.0, 48656.0, 50000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                borderColor: '#4ade80',
+                backgroundColor: 'rgba(74, 222, 128, 0.08)',
+                fill: false,
+                tension: 0.25,
+                pointRadius: 1,
+                borderWidth: 2,
+                borderDash: [2,2],
+            },
+            {
+                label: 'Satellite (戰術，嚴格)',
+                data: [111918.0, 112870.0, 117615.0, 122670.0, 121339.0, 118224.0, 121395.0, 120815.0, 123508.0, 124081.0, 123890.0, 123318.0, 123175.0, 122269.0, 123461.0, 123032.0, 119296.0, 116171.0, 118720.0, 117712.0, 118241.0, 121209.0, 124903.0, 126351.0, 125847.0, 124628.0, 123000.0, 117085.0, 123057.0, 123230.0, 113788.0, 118560.0, 125498.0, 126150.0, 127724.0, 128900.0, 134984.0, 134430.0, 136329.0, 136022.0, 133961.0, 133351.0, 136468.0, 137349.0, 138256.0, 138712.0, 137176.0, 137703.0, 137703.0, 137703.0, 137703.0, 137276.0, 138181.0, 138232.0, 138332.0, 138684.0, 141756.0, 143304.0, 145967.0, 150000.0, 200000.0, 200000.0, 197701.0, 204388.0, 205330.0, 201016.0, 211144.0, 218620.0, 224154.0, 224154.0, 233722.0, 230186.0, 234970.0, 244538.0, 239754.0, 236218.0, 235386.0, 246202.0, 247418.0, 247418.0, 247418.0, 247418.0, 247418.0, 247418.0, 247418.0, 247418.0, 247418.0, 240921.0, 243636.0, 248899.0, 239475.0, 227362.0, 216349.0, 216349.0, 216349.0, 216349.0, 216349.0, 216349.0, 216349.0, 216349.0],
+                borderColor: '#a78bfa',
+                backgroundColor: 'rgba(167, 139, 250, 0.06)',
+                fill: false,
+                tension: 0.25,
+                pointRadius: 1,
+                borderWidth: 2,
+            },
+            {
+                label: 'Risk-Adjusted (v9 Tiered)',
+                data: [200000.0, 129230.0, 129696.0, 134140.0, 134313.0, 129732.0, 138544.0, 145363.0, 149513.0, 136568.0, 144263.0, 141516.0, 142878.0, 148679.0, 142733.0, 142711.0, 141451.0, 148777.0, 149356.0, 151712.0, 153236.0, 155626.0, 154916.0, 153911.0, 153340.0, 155713.0, 157462.0, 155519.0, 160376.0, 166889.0, 161576.0, 157860.0, 138007.0, 134933.0, 123953.0, 121802.0, 119834.0, 121454.0, 121923.0, 132101.0],
+                borderColor: '#fb923c',
+                backgroundColor: 'rgba(251, 146, 60, 0.08)',
+                fill: false,
+                tension: 0.3,
+                pointRadius: 1,
+                borderWidth: 2,
+                borderDash: [4,2],
+            },
+            {
+                label: '初始資金',
+                data: [200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000],
+                borderColor: '#475569',
+                borderDash: [5, 5],
+                fill: false,
+                pointRadius: 0,
+                borderWidth: 1,
+            }
+        ]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: { 
+                labels: { color: '#94a3b8', boxWidth: 12, font: {size: 11} },
+                position: 'top'
+            },
+        },
+        scales: {
+            x: { ticks: { color: '#64748b', maxTicksLimit: 12 }, grid: { color: '#1e293b' } },
+            y: { ticks: { color: '#64748b', callback: v => (v/1000).toFixed(0)+'K' }, grid: { color: '#1e293b' } },
+        }
+    }
+});
+
+// 額外提示：tiered 狀態
+console.log('%c[v9 Tiered] overall=' + 0.4576 + ' fvol=' + (0.3278*100).toFixed(1) + '%', 'color:#64748b');
+</script>
+</body>
+</html>

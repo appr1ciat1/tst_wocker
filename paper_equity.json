@@ -789,6 +789,13 @@
       "capital": 216349.0,
       "n_positions": 0,
       "n_closed_today": 0
+    },
+    {
+      "date": "2026-06-26",
+      "equity": 216349.0,
+      "capital": 216349.0,
+      "n_positions": 0,
+      "n_closed_today": 0
     }
   ],
   "core_equity_curve": [
@@ -1186,6 +1193,10 @@
     },
     {
       "date": "2026-06-22",
+      "equity": 0.0
+    },
+    {
+      "date": "2026-06-26",
       "equity": 0.0
     }
   ],
@@ -1585,22 +1596,26 @@
     {
       "date": "2026-06-22",
       "equity": 216349.0
+    },
+    {
+      "date": "2026-06-26",
+      "equity": 216349.0
     }
   ],
   "last_tiered": {
-    "overall": 0.4437,
-    "core_mult": 0.8122,
-    "sat_mult": 0.544,
+    "overall": 0.4576,
+    "core_mult": 0.8285,
+    "sat_mult": 0.5836,
     "core_trade_scale": 1.0,
     "sat_trade_scale": 1.0,
-    "core_effective": 0.0901,
-    "sat_effective": 0.181,
-    "forecast_ann_vol": 0.338,
+    "core_effective": 0.0948,
+    "sat_effective": 0.2003,
+    "forecast_ann_vol": 0.3278,
     "target_ann_vol": 0.15,
-    "over": 0.5365,
+    "over": 0.4899,
     "vol_regime": "crisis",
-    "core_rotation_boost": 1.2254,
-    "sat_rotation_boost": 0.5373,
+    "core_rotation_boost": 1.2185,
+    "sat_rotation_boost": 0.5407,
     "rotate_sat_profits_to_core": 0.0,
     "rotate_core_profits_to_sat": 0.0,
     "sat_entry_freeze": 1.0,
@@ -1613,7 +1628,7 @@
     "core_alpha_trim_frac": 0.85,
     "core_alpha_trim_min_pnl": 0.005
   },
-  "last_fvol": 0.3484202895175696,
+  "last_fvol": 0.3380293913684344,
   "cooling_days_left": 0,
   "daily_signals": [
     {
@@ -1674,6 +1689,18 @@
         "6116",
         "2408",
         "3481"
+      ]
+    },
+    {
+      "date": "2026-06-26",
+      "tickers": [
+        "1303",
+        "2344",
+        "3481",
+        "2327",
+        "2408",
+        "2887",
+        "2883"
       ]
     }
   ],
@@ -1833,6 +1860,10 @@
     {
       "date": "2026-06-22",
       "equity": 121923.0
+    },
+    {
+      "date": "2026-06-26",
+      "equity": 132101.0
     }
   ]
 }
