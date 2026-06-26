@@ -3,25 +3,69 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 台股量化交易 v9</title>
-    <meta http-equiv="refresh" content="0; url=stock_report.html">
+    <title>AI 台股量化交易 — 策略選單</title>
     <style>
-        body {
-            font-family: system-ui, sans-serif;
-            background: #0f172a;
-            color: #e2e8f0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            margin: 0;
-        }
-        a { color: #60a5fa; }
+        body { font-family: system-ui, "Noto Sans TC", sans-serif; background: #0f172a;
+               color: #e2e8f0; margin: 0; padding: 32px 16px; }
+        .wrap { max-width: 880px; margin: 0 auto; }
+        h1 { font-size: 1.6rem; margin: 0 0 4px; }
+        .sub { color: #94a3b8; margin: 0 0 28px; font-size: .95rem; }
+        .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+        a.card { display: block; text-decoration: none; color: inherit; background: #1e293b;
+                 border: 1px solid #334155; border-radius: 14px; padding: 18px 20px;
+                 transition: transform .12s, border-color .12s; }
+        a.card:hover { transform: translateY(-2px); border-color: #60a5fa; }
+        .tag { font-size: .72rem; font-weight: 700; letter-spacing: .04em; padding: 2px 8px;
+               border-radius: 999px; display: inline-block; margin-bottom: 8px; }
+        .surgepro { background: #4c0519; color: #fda4af; }
+        .surge { background: #422006; color: #fdba74; }
+        .guard { background: #052e2b; color: #5eead4; }
+        .base  { background: #1e1b4b; color: #a5b4fc; }
+        .paper { background: #3f1d38; color: #f0abfc; }
+        .name { font-size: 1.15rem; font-weight: 700; margin: 0 0 6px; }
+        .desc { color: #cbd5e1; font-size: .9rem; margin: 0 0 10px; }
+        .stat { color: #94a3b8; font-size: .82rem; font-variant-numeric: tabular-nums; }
+        .stat b { color: #e2e8f0; }
+        footer { color: #64748b; font-size: .78rem; margin-top: 28px; text-align: center; }
     </style>
 </head>
 <body>
-    <p>正在前往報表…若未自動跳轉，請點 <a href="stock_report.html">stock_report.html</a>、
-       <a href="paper_trading.html">paper_trading.html</a> 或
-       <a href="strategy_compare.html">strategy_compare.html（三策略比較）</a>。</p>
+  <div class="wrap">
+    <h1>AI 台股量化交易</h1>
+    <p class="sub">四個正式策略：v8.5 基準 + 約束優化後的 GUARD / SURGE / SURGE PRO。每日收盤後自動更新。</p>
+    <div class="grid">
+      <a class="card" href="report_surge_pro.html">
+        <span class="tag surgepro">SURGE PRO · 追最高報酬</span>
+        <p class="name">mom_surge_pro</p>
+        <p class="desc">SURGE 去風險不變 + 更激進分段加碼（弱 0% / 強 12.5% / 更強 17% / 最強 18.5%）。報酬最高，2022 較弱。</p>
+        <p class="stat">全期 年化 <b>67.1%</b> · MDD <b>-22.7%</b> · Calmar <b>2.96</b></p>
+      </a>
+      <a class="card" href="report_surge.html">
+        <span class="tag surge">SURGE · 追報酬</span>
+        <p class="name">mom_surge</p>
+        <p class="desc">去風險 + 分段強勢加碼（弱 0% / 強 12.5% / 更強 14.5% / 最強 17%）。</p>
+        <p class="stat">全期 年化 <b>58.8%</b> · MDD <b>-21.5%</b> · Calmar <b>2.73</b></p>
+      </a>
+      <a class="card" href="report_guard.html">
+        <span class="tag guard">GUARD · 最穩健</span>
+        <p class="name">mom_guard</p>
+        <p class="desc">v8.5 + 弱勢去風險（最弱全出 + breadth + 放寬停損），不加碼。</p>
+        <p class="stat">全期 年化 <b>51.2%</b> · MDD <b>-24.7%</b> · Calmar <b>2.08</b></p>
+      </a>
+      <a class="card" href="stock_report.html">
+        <span class="tag base">v8.5 · 基準</span>
+        <p class="name">v8.5 baseline</p>
+        <p class="desc">純動量 v8.5（binary regime，無去風險 / 無加碼）+ 當日信號 / 籌碼 / 新聞標注。優化前基準。</p>
+        <p class="stat">全期 年化 <b>40.2%</b> · MDD <b>-41.1%</b> · Calmar <b>0.98</b></p>
+      </a>
+      <a class="card" href="paper_trading.html">
+        <span class="tag paper">Paper</span>
+        <p class="name">paper_trading</p>
+        <p class="desc">模擬交易追蹤（每日持倉與權益曲線）。</p>
+        <p class="stat">每日更新</p>
+      </a>
+    </div>
+    <footer>數字為 2019–2026 凍結回測（動態 Top-60），非未來保證。SURGE/GUARD 詳見 artifacts/v85_optimization_result.md。</footer>
+  </div>
 </body>
 </html>

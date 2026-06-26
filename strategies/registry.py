@@ -56,6 +56,7 @@ def _ensure_loaded():
     _LOADED = True
     # 在此 import 內建插件即會觸發其 @register
     from strategies import momentum_v85       # noqa: F401  v8.5（忠實引擎）
+    from strategies import optimized_v85       # noqa: F401  mom_guard / mom_surge（v8.5 約束優化）
     from strategies import sector_rotation_v2  # noqa: F401  SR v2（忠實引擎）
     from strategies import hybrid_tiered_v9    # noqa: F401  v9 overlay
     from strategies import momentum_v9_sbl     # noqa: F401  v9 + 借券(SBL) tilt

@@ -6,7 +6,6 @@ on:
     paths:
       - 'stock_report.html'
       - 'paper_trading.html'
-      - 'strategy_compare.html'
       - 'backtest_chart.png'
       - 'index.html'
       - '.nojekyll'
@@ -44,9 +43,14 @@ jobs:
           sparse-checkout: |
             stock_report.html
             paper_trading.html
-            strategy_compare.html
             backtest_chart.png
             index.html
+            report_guard.html
+            chart_guard.png
+            report_surge.html
+            chart_surge.png
+            report_surge_pro.html
+            chart_surge_pro.png
             .nojekyll
           sparse-checkout-cone-mode: false
 
@@ -60,8 +64,10 @@ jobs:
             fi
             cp "$f" _site/
           done
-          # 三策略比較頁(非必要:缺檔不阻擋部署)
-          [ -f strategy_compare.html ] && cp strategy_compare.html _site/ || echo "strategy_compare.html 暫缺,略過"
+          # v8.5 約束優化策略頁（GUARD / SURGE / SURGE PRO）：可選，缺檔不致命
+          for f in report_guard.html chart_guard.png report_surge.html chart_surge.png report_surge_pro.html chart_surge_pro.png; do
+            if [ -f "$f" ]; then cp "$f" _site/; else echo "optional missing: $f"; fi
+          done
           cp .nojekyll _site/ 2>/dev/null || touch _site/.nojekyll
           echo "Site files:"
           ls -lh _site/

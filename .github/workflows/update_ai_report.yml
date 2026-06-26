@@ -1,9 +1,5 @@
 name: AI Quant Trading Report v9
 
-# 讓 github-actions[bot] 能 commit/push 回 main(否則 push 會 403)
-permissions:
-  contents: write
-
 on:
   schedule:
     # 每週一到五 UTC 09:17 執行（台灣時間 17:17 收盤後，避開 GitHub Actions 整點高峰）
@@ -62,15 +58,53 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run AI Quant Pipeline v9 (V3 production params)
+      # v8.5 約束優化策略 GUARD（去風險、不加碼、最穩健）→ report_guard.html
+      - name: GUARD report (mom_guard)
         if: github.event.schedule != '0 10 1 * *'
         run: |
           python ai_report.py \
-            --hybrid-tiered \
-            --regime-filter \
-            --regime-graduated \
-            --breadth-regime \
-            --regime-floor 0.10 \
+            --no-hybrid-tiered --consec-loss-limit 3 \
+            --sl-atr 3.5 --regime-floor 0.0 --dynamic-topk \
+            --days ${{ github.event.inputs.days || '1200' }}
+          sed 's#backtest_chart.png#chart_guard.png#g' stock_report.html > report_guard.html
+          mv backtest_chart.png chart_guard.png
+
+      # v8.5 約束優化策略 SURGE（去風險 + 分段強勢加碼、追更高報酬）→ report_surge.html
+      - name: SURGE report (mom_surge)
+        if: github.event.schedule != '0 10 1 * *'
+        run: |
+          python ai_report.py \
+            --no-hybrid-tiered --consec-loss-limit 3 \
+            --sl-atr 3.5 --hold-days 22 --position-size 0.10 \
+            --regime-floor 0.0 --dynamic-topk --dynamic-gap-filter \
+            --regime-sizing --strong-regime-mult 1.25 --strong-breadth-min 0.55 \
+            --strong-vix-max 25.0 --max-regime-scale 1.7 \
+            --strong-tiers "0.65,20,1.45;0.75,15,1.75" \
+            --days ${{ github.event.inputs.days || '1200' }}
+          sed 's#backtest_chart.png#chart_surge.png#g' stock_report.html > report_surge.html
+          mv backtest_chart.png chart_surge.png
+
+      # v8.5 約束優化策略 SURGE PRO（更激進分段加碼、追最高報酬，2022 較弱）→ report_surge_pro.html
+      - name: SURGE PRO report (mom_surge_pro)
+        if: github.event.schedule != '0 10 1 * *'
+        run: |
+          python ai_report.py \
+            --no-hybrid-tiered --consec-loss-limit 3 \
+            --sl-atr 3.5 --hold-days 25 --position-size 0.10 \
+            --regime-floor 0.0 --dynamic-topk --dynamic-gap-filter \
+            --regime-sizing --strong-regime-mult 1.25 --strong-breadth-min 0.55 \
+            --strong-vix-max 28.0 --max-regime-scale 1.9 \
+            --strong-tiers "0.62,18,1.7;0.72,15,1.85" \
+            --days ${{ github.event.inputs.days || '1200' }}
+          sed 's#backtest_chart.png#chart_surge_pro.png#g' stock_report.html > report_surge_pro.html
+          mv backtest_chart.png chart_surge_pro.png
+
+      # v8.5 純 baseline（binary regime，無 graduated/breadth/加碼）→ stock_report.html（主報表 + 當日信號）
+      - name: v8.5 baseline report (stock_report.html)
+        if: github.event.schedule != '0 10 1 * *'
+        run: |
+          python ai_report.py \
+            --no-hybrid-tiered --no-regime-graduated --no-breadth-regime --consec-loss-limit 3 \
             --tp-atr ${{ github.event.inputs.tp_atr || '4.0' }} \
             --sl-atr ${{ github.event.inputs.sl_atr || '3.0' }} \
             --hold-days ${{ github.event.inputs.hold_days || '20' }} \
@@ -78,11 +112,9 @@ jobs:
             --gap-filter ${{ github.event.inputs.gap_filter || '1.5' }} \
             --days ${{ github.event.inputs.days || '1200' }}
 
-      # 比較頁產生器同時輸出「正確的」paper_trading.html(v9 production,自 4/22 真實引擎損益)
-      # 取代舊版 paper_tracker.py(其 live/replay 路徑都會凍結損益,已停用)
-      - name: Strategy Comparison + Paper Dashboard (v8.5 / v9 / v9+反轉)
+      - name: Paper Trading Tracker
         if: github.event.schedule != '0 10 1 * *'
-        run: python -m twstk.report.compare --start 2022-01-01 --out strategy_compare.html
+        run: python paper_tracker.py
 
       - name: Monthly Paper Trading Report
         if: github.event.schedule == '0 10 1 * *'
@@ -99,26 +131,22 @@ jobs:
           git config --global user.email "voidful.stack@gmail.com"
           git config --global user.name "Voidful"
 
-          git add stock_report.html backtest_chart.png paper_trading.html paper_equity.json strategy_compare.html || true
+          git add stock_report.html backtest_chart.png paper_trading.html paper_equity.json || true
+          git add report_guard.html chart_guard.png report_surge.html chart_surge.png index.html || true
+          git add report_surge_pro.html chart_surge_pro.png || true
           git add -u artifacts || true
 
           if git diff --cached --quiet; then
             echo "No changes"
           else
-            git commit -m "📊 AI Report v9 (Hybrid Tiered) + Paper Trading ($(date -u '+%Y-%m-%d'))"
+            git commit -m "📊 AI Report v8.5 + GUARD/SURGE/SURGE PRO + Paper Trading ($(date -u '+%Y-%m-%d'))"
           fi
 
-          # Rebase onto latest remote。重生的報表/圖檔(HTML/PNG)無法自動 merge,
-          # 衝突時一律採「本次重生的最新版」(-X theirs),避免 rebase 卡住導致整個更新失敗。
+          # Rebase onto latest remote without downloading the full repository history.
           git fetch --no-tags --depth=50 origin main:refs/remotes/origin/main
-          git rebase -X theirs --autostash origin/main || { git rebase --abort 2>/dev/null || true; git reset --hard HEAD; }
+          git rebase --autostash origin/main
 
-          # push;若被搶先,重抓後以本次重生檔覆蓋再 push(最多 3 次)
-          for i in 1 2 3; do
-            if git push origin HEAD:main; then break; fi
-            git fetch --no-tags --depth=50 origin main:refs/remotes/origin/main
-            git rebase -X theirs --autostash origin/main || git rebase --abort 2>/dev/null || true
-          done
+          git push origin HEAD:main
 
   # 每季第一週自動跑 sweep + Monte Carlo + Walk-Forward
   quarterly-health-check:
@@ -183,14 +211,8 @@ jobs:
             git commit -m "🔄 Quarterly health check ($(date -u '+%Y-%m-%d'))"
           fi
 
-          # Rebase onto latest remote。重生的報表/圖檔(HTML/PNG)無法自動 merge,
-          # 衝突時一律採「本次重生的最新版」(-X theirs),避免 rebase 卡住導致整個更新失敗。
+          # Rebase onto latest remote without downloading the full repository history.
           git fetch --no-tags --depth=50 origin main:refs/remotes/origin/main
-          git rebase -X theirs --autostash origin/main || { git rebase --abort 2>/dev/null || true; git reset --hard HEAD; }
+          git rebase --autostash origin/main
 
-          # push;若被搶先,重抓後以本次重生檔覆蓋再 push(最多 3 次)
-          for i in 1 2 3; do
-            if git push origin HEAD:main; then break; fi
-            git fetch --no-tags --depth=50 origin main:refs/remotes/origin/main
-            git rebase -X theirs --autostash origin/main || git rebase --abort 2>/dev/null || true
-          done
+          git push origin HEAD:main

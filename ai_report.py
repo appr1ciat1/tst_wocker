@@ -57,7 +57,12 @@ except Exception:
     V3_PRODUCTION_LABEL = 'v9 Hybrid Tiered'
     build_v3_production_backtester = None
 from strategy.benchmark import fetch_benchmark, equal_weight_benchmark, compute_excess_return
-from strategy.institutional_flow import build_inst_flow_df, get_inst_flow_for_signals, fetch_inst_rankings
+from strategy.institutional_flow import (
+    build_inst_flow_df,
+    build_inst_flow_windows,
+    get_inst_flow_for_signals,
+    fetch_inst_rankings,
+)
 from strategy.news_sentiment import get_news_sentiment_for_signals
 
 # 嘗試載入 exchange_calendars
@@ -1802,6 +1807,10 @@ def parse_args():
         help='v8.5: Breadth-aware regime：用 universe 內部寬度修正 regime 判斷 (預設開啟)'
     )
     parser.add_argument(
+        '--no-breadth-regime', dest='breadth_regime', action='store_false',
+        help='關閉 breadth regime（產出純 binary v8.5 baseline 用）'
+    )
+    parser.add_argument(
         '--candidate-breadth', action='store_true',
         help='啟用候選寬度：前 15 名候選股 20MA 支撐品質檢查'
     )
@@ -1879,6 +1888,63 @@ def parse_args():
         help='動態 Gap Filter：強勢 Regime 放寬跳空限制至 2.0 ATR'
     )
     parser.add_argument(
+        '--v85-optimized', action='store_true',
+        help='啟用 constrained search 通過的 v8.5 優化預設：關閉 v9 overlay，position_size=0.115'
+    )
+    parser.add_argument(
+        '--regime-sizing', action='store_true',
+        help='只在強勢 regime 加碼：0050>MA60/MA20、breadth 夠強、VIX 低時提高單筆部位'
+    )
+    parser.add_argument(
+        '--strong-regime-mult', type=float, default=1.25,
+        help='強勢 regime 單筆部位倍數 (預設 1.25；10%% -> 12.5%%)'
+    )
+    parser.add_argument(
+        '--strong-breadth-min', type=float, default=0.55,
+        help='強勢加碼所需 breadth 下限 (預設 0.55)'
+    )
+    parser.add_argument(
+        '--strong-vix-max', type=float, default=20.0,
+        help='強勢加碼所需 VIX 上限 (預設 20)'
+    )
+    parser.add_argument(
+        '--max-regime-scale', type=float, default=1.50,
+        help='強勢加碼後 regime_scale 上限 (預設 1.5；SURGE 用 1.7)'
+    )
+    parser.add_argument(
+        '--strong-tiers', type=str, default=None,
+        help='分段強勢加碼：breadth,vix,mult 以分號分隔，如 "0.65,20,1.45;0.75,15,1.75"。'
+             '條件越強(breadth 越高、VIX 越低)倍數越大；空=單段(strong_regime_mult)'
+    )
+    parser.add_argument(
+        '--inst-hold-exit', action='store_true',
+        help='TP/時間到期且獲利時，用三大法人 5/10/20 日籌碼決定續抱、分批停利或全出'
+    )
+    parser.add_argument(
+        '--inst-partial-frac', type=float, default=0.50,
+        help='法人條件普通時的分批停利比例 (預設 0.50)'
+    )
+    parser.add_argument(
+        '--inst-max-extend-days', type=int, default=10,
+        help='法人續抱最多延長交易日數 (預設 10)'
+    )
+    parser.add_argument(
+        '--low-wr-rr-gate', action='store_true',
+        help='股票近期策略勝率低於門檻時，必須通過更嚴格 TP/SL 風報比才進場'
+    )
+    parser.add_argument(
+        '--low-wr-threshold', type=float, default=0.45,
+        help='低勝率風報比 gate 的勝率門檻 (預設 0.45)'
+    )
+    parser.add_argument(
+        '--low-wr-min-rr', type=float, default=2.0,
+        help='低勝率交易最低風報比 (預設 2.0)'
+    )
+    parser.add_argument(
+        '--low-wr-min-tp', type=float, default=0.08,
+        help='低勝率交易最低預期 TP 報酬 (預設 8%%)'
+    )
+    parser.add_argument(
         '--dynamic-corr-filter', action='store_true',
         help='動態相關性過濾：強勢 Regime 放寬至 0.85'
     )
@@ -1917,6 +1983,11 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.v85_optimized:
+        args.hybrid_tiered = False
+        args.position_size = 0.115
+        args.breadth_regime = True
 
     # 決定股池
     if args.static_pool or args.tickers:
@@ -1960,6 +2031,7 @@ def main():
 
     # Phase 2.5: 籌碼時序數據（僅用於因子加權；報表顯示使用輕量 API）
     inst_flow_df = None
+    inst_flow_by_window = None
     if args.inst_flow > 0:
         try:
             inst_flow_df, inst_ratio_df = build_inst_flow_df(
@@ -1967,6 +2039,13 @@ def main():
         except Exception as e:
             print(f"   ⚠️ 籌碼數據抓取失敗，跳過: {e}")
             inst_flow_df = None
+    if args.inst_hold_exit:
+        try:
+            inst_flow_by_window, inst_ratio_df = build_inst_flow_windows(
+                list(close_df.columns), close_df, windows=(5, 10, 20), verbose=True)
+        except Exception as e:
+            print(f"   ⚠️ 法人出場籌碼資料抓取失敗，改用原出場: {e}")
+            inst_flow_by_window = None
 
     # Phase 3.5: 提前下載 0050 用於 regime filter + 殘差動量
     market_close = None
@@ -2050,6 +2129,21 @@ def main():
             dynamic_topk=args.dynamic_topk,
             dynamic_gap_filter=args.dynamic_gap_filter,
             dynamic_corr_filter=args.dynamic_corr_filter,
+            regime_sizing=args.regime_sizing,
+            strong_regime_mult=args.strong_regime_mult,
+            strong_breadth_min=args.strong_breadth_min,
+            strong_vix_max=args.strong_vix_max,
+            max_regime_scale=args.max_regime_scale,
+            strong_tiers=([tuple(float(x) for x in seg.split(','))
+                           for seg in args.strong_tiers.split(';')]
+                          if args.strong_tiers else None),
+            inst_hold_exit=args.inst_hold_exit,
+            inst_partial_frac=args.inst_partial_frac,
+            inst_max_extend_days=args.inst_max_extend_days,
+            low_wr_rr_gate=args.low_wr_rr_gate,
+            low_wr_threshold=args.low_wr_threshold,
+            low_wr_min_rr=args.low_wr_min_rr,
+            low_wr_min_tp=args.low_wr_min_tp,
             sector_flow_tilt=args.sector_flow_tilt,
             tilt_strength=args.tilt_strength,
             tilt_windows=[int(w) for w in args.tilt_windows.split(',')],
@@ -2063,6 +2157,7 @@ def main():
         market_close=market_close,
         vol_df=vol_df,
         universe_mask=universe_mask,
+        inst_flow_by_window=inst_flow_by_window,
     )
 
     report_equity_df, report_trades_df = slice_evaluation_window(

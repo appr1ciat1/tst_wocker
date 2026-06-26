@@ -122,6 +122,25 @@ class EventDrivenBacktester:
                  dynamic_topk=False,
                  dynamic_gap_filter=False,
                  dynamic_corr_filter=False,
+                 regime_sizing=False,
+                 strong_regime_mult=1.25,
+                 strong_breadth_min=0.55,
+                 strong_vix_max=20.0,
+                 max_regime_scale=1.50,
+                 strong_tiers=None,
+                 inst_hold_exit=False,
+                 inst_hold_min_score=0.15,
+                 inst_partial_min_score=-0.10,
+                 inst_partial_frac=0.50,
+                 inst_max_extend_days=10,
+                 low_wr_rr_gate=False,
+                 low_wr_threshold=0.45,
+                 low_wr_lookback=20,
+                 low_wr_min_trades=5,
+                 low_wr_min_rr=2.0,
+                 low_wr_rr_slope=2.0,
+                 low_wr_min_tp=0.08,
+                 low_wr_tp_slope=0.10,
                  sector_flow_tilt=False,
                  tilt_strength=1.0,
                  tilt_windows=None,
@@ -191,6 +210,27 @@ class EventDrivenBacktester:
         self.dynamic_topk = dynamic_topk
         self.dynamic_gap_filter = dynamic_gap_filter
         self.dynamic_corr_filter = dynamic_corr_filter
+        self.regime_sizing = regime_sizing
+        self.strong_regime_mult = strong_regime_mult
+        self.strong_breadth_min = strong_breadth_min
+        self.strong_vix_max = strong_vix_max
+        self.max_regime_scale = max_regime_scale
+        # 分段強勢加碼：list of (breadth_min, vix_max, mult)，條件越強倍數越大；
+        # None 時退回單段 strong_regime_mult（向後相容）。
+        self.strong_tiers = strong_tiers
+        self.inst_hold_exit = inst_hold_exit
+        self.inst_hold_min_score = inst_hold_min_score
+        self.inst_partial_min_score = inst_partial_min_score
+        self.inst_partial_frac = inst_partial_frac
+        self.inst_max_extend_days = inst_max_extend_days
+        self.low_wr_rr_gate = low_wr_rr_gate
+        self.low_wr_threshold = low_wr_threshold
+        self.low_wr_lookback = low_wr_lookback
+        self.low_wr_min_trades = low_wr_min_trades
+        self.low_wr_min_rr = low_wr_min_rr
+        self.low_wr_rr_slope = low_wr_rr_slope
+        self.low_wr_min_tp = low_wr_min_tp
+        self.low_wr_tp_slope = low_wr_tp_slope
         self.sector_flow_tilt = sector_flow_tilt
         self.tilt_strength = tilt_strength
         self.tilt_windows = tilt_windows if tilt_windows else [10, 15, 20]
@@ -267,9 +307,92 @@ class EventDrivenBacktester:
         atr = true_range.rolling(period).mean()
         return atr
 
+    def _inst_flow_value(self, inst_flow_by_window, window, ticker, idx):
+        if not inst_flow_by_window or window not in inst_flow_by_window:
+            return np.nan
+        df = inst_flow_by_window[window]
+        if df is None or ticker not in df.columns or idx < 0:
+            return np.nan
+        try:
+            series = df[ticker].iloc[:idx + 1].ffill()
+            if series.empty:
+                return np.nan
+            return float(series.iloc[-1])
+        except Exception:
+            return np.nan
+
+    def _institutional_exit_action(self, ticker, idx, trade, inst_flow_by_window,
+                                   profit_pct, exit_reason):
+        if (not self.inst_hold_exit
+                or not inst_flow_by_window
+                or profit_pct <= 0
+                or ('停利' not in exit_reason and '時限' not in exit_reason)):
+            return 'full', {}
+
+        if trade.get('days_held', 0) >= self.max_hold_days + self.inst_max_extend_days:
+            return 'full', {'inst_score': np.nan, 'inst_note': 'extension_limit'}
+
+        lookup_idx = idx - 1
+        flows = {
+            5: self._inst_flow_value(inst_flow_by_window, 5, ticker, lookup_idx),
+            10: self._inst_flow_value(inst_flow_by_window, 10, ticker, lookup_idx),
+            20: self._inst_flow_value(inst_flow_by_window, 20, ticker, lookup_idx),
+        }
+        valid = [v for v in flows.values() if not pd.isna(v)]
+        if len(valid) < 2:
+            return 'full', {'inst_score': np.nan, 'inst_note': 'insufficient_inst_data'}
+
+        score = (
+            (0.50 * flows[5] if not pd.isna(flows[5]) else 0.0)
+            + (0.30 * flows[10] if not pd.isna(flows[10]) else 0.0)
+            + (0.20 * flows[20] if not pd.isna(flows[20]) else 0.0)
+        )
+        positives = sum(1 for v in valid if v > 0)
+        note = {
+            'inst_5d': flows[5],
+            'inst_10d': flows[10],
+            'inst_20d': flows[20],
+            'inst_score': score,
+        }
+
+        if positives >= 2 and score >= self.inst_hold_min_score:
+            return 'hold', note
+        if (score >= self.inst_partial_min_score
+                and not trade.get('inst_partial_taken', False)):
+            return 'partial', note
+        return 'full', note
+
+    def _low_wr_rr_reject(self, ticker, ticker_history, tp_price, sl_price, entry_price):
+        if not self.low_wr_rr_gate or ticker not in ticker_history:
+            return False, {}
+
+        recent = ticker_history[ticker][-self.low_wr_lookback:]
+        if len(recent) < self.low_wr_min_trades:
+            return False, {}
+
+        win_rate = sum(1 for r in recent if r > 0) / len(recent)
+        if win_rate >= self.low_wr_threshold:
+            return False, {'win_rate': win_rate}
+
+        upside = max(0.0, (tp_price / entry_price) - 1)
+        downside = max(1e-8, (entry_price - sl_price) / entry_price)
+        rr = upside / downside
+        wr_gap = self.low_wr_threshold - win_rate
+        required_rr = self.low_wr_min_rr + wr_gap * self.low_wr_rr_slope
+        required_tp = self.low_wr_min_tp + wr_gap * self.low_wr_tp_slope
+        reject = rr < required_rr or upside < required_tp
+        return reject, {
+            'win_rate': win_rate,
+            'rr': rr,
+            'required_rr': required_rr,
+            'tp_return': upside,
+            'required_tp': required_tp,
+        }
+
     def run(self, total_score, close_df, open_df, high_df, low_df, ma_60,
             top_k=3, threshold=2.0, atr_df=None,
-            market_close=None, vol_df=None, universe_mask=None):
+            market_close=None, vol_df=None, universe_mask=None,
+            inst_flow_by_window=None, vix_series=None):
         """
         執行事件驅動回測。
 
@@ -337,8 +460,8 @@ class EventDrivenBacktester:
         self._ma20_all = close_df.rolling(20).mean() if self.breadth_regime else None
 
         # 宏觀 Regime / v9：下載 VIX（VIX>33 建倉規則）
-        self._vix_series = None
-        if self.macro_regime or self.hybrid_tiered:
+        self._vix_series = vix_series
+        if self._vix_series is None and (self.macro_regime or self.hybrid_tiered or self.regime_sizing):
             try:
                 import yfinance as yf
                 vix = yf.download('^VIX', start=close_df.index[0], end=close_df.index[-1], progress=False)
@@ -396,6 +519,7 @@ class EventDrivenBacktester:
         active_trades = {}  # ticker -> trade_info
         max_positions = int(1.0 / self.position_size)  # 最多同時持有
         ticker_history = {}  # ticker -> list of recent Return_Pct (for blacklist)
+        self._rejected_entry_log = []
 
         def is_tradable_bar(ticker, idx):
             """True only when the raw OHLCV bar can support a real fill."""
@@ -530,12 +654,36 @@ class EventDrivenBacktester:
                 if exit_triggered:
                     # 扣除賣出成本 + 滑價
                     exit_price_with_slippage = exit_price * (1 - self.slippage)
-                    revenue = trade['shares'] * exit_price_with_slippage * (1 - self.sell_cost)
+                    gross_revenue = trade['shares'] * exit_price_with_slippage * (1 - self.sell_cost)
+                    gross_cost_in = trade['actual_cost']
+                    gross_profit_pct = (gross_revenue - gross_cost_in) / gross_cost_in
+
+                    inst_action, inst_note = self._institutional_exit_action(
+                        ticker, i, trade, inst_flow_by_window,
+                        gross_profit_pct, exit_reason,
+                    )
+                    if inst_action == 'hold':
+                        trade['inst_exit_deferrals'] = trade.get('inst_exit_deferrals', 0) + 1
+                        trade['last_inst_score'] = inst_note.get('inst_score')
+                        continue
+
+                    partial_frac = 0.0
+                    if inst_action == 'partial':
+                        partial_frac = min(max(self.inst_partial_frac, 0.05), 0.95)
+
+                    exit_shares = trade['shares'] * (partial_frac if partial_frac else 1.0)
+                    exit_cost_in = trade['actual_cost'] * (partial_frac if partial_frac else 1.0)
+                    revenue = exit_shares * exit_price_with_slippage * (1 - self.sell_cost)
                     capital += revenue
 
                     # 計算含成本的真實報酬
-                    total_cost_in = trade['actual_cost']
+                    total_cost_in = exit_cost_in
                     profit_pct = (revenue - total_cost_in) / total_cost_in
+                    record_reason = exit_reason
+                    if partial_frac:
+                        record_reason = f"{exit_reason} / 法人分批停利"
+                    elif inst_note:
+                        record_reason = f"{exit_reason} / 法人確認"
 
                     trade_record = {
                         'Ticker': ticker,
@@ -544,20 +692,35 @@ class EventDrivenBacktester:
                         'Entry_Price': round(trade['entry_price'], 2),
                         'Exit_Price': round(exit_price, 2),
                         'Return_Pct': round(profit_pct, 4),
-                        'Reason': exit_reason,
+                        'Reason': record_reason,
                         'Days_Held': trade['days_held'],
                         'TP_Price': round(trade['tp_price'], 2),
                         'SL_Price': round(trade['sl_price'], 2),
+                        'Partial_Fraction': round(partial_frac, 4) if partial_frac else 1.0,
+                        'Inst_5D': inst_note.get('inst_5d'),
+                        'Inst_10D': inst_note.get('inst_10d'),
+                        'Inst_20D': inst_note.get('inst_20d'),
+                        'Inst_Score': inst_note.get('inst_score'),
                         'Book': trade.get('book', 'satellite'),  # v9
                         'Tiered_Scale': trade.get('tiered_scale', 1.0),  # v9
                     }
                     trades.append(trade_record)
-                    exited_tickers.append(ticker)
 
                     # 更新 per-stock 歷史（用於 blacklist）
                     if ticker not in ticker_history:
                         ticker_history[ticker] = []
                     ticker_history[ticker].append(profit_pct)
+
+                    if partial_frac:
+                        trade['shares'] -= exit_shares
+                        trade['actual_cost'] -= exit_cost_in
+                        trade['inst_partial_taken'] = True
+                        trade['inst_exit_deferrals'] = trade.get('inst_exit_deferrals', 0) + 1
+                        trade['last_inst_score'] = inst_note.get('inst_score')
+                        if trade['shares'] > 1e-8 and trade['actual_cost'] > 0:
+                            continue
+
+                    exited_tickers.append(ticker)
 
                     # === 連續停損追蹤 ===
                     if '停損' in exit_reason:
@@ -738,6 +901,9 @@ class EventDrivenBacktester:
                                 'Tiered_Scale': 1.0,
                             })
 
+                    # regime 條件式放行：確認強多頭（0050 > MA60 且 > MA20，且 vol regime
+                    # 正常）時，抑制「核心獲利了結回流 Sat」與冷卻續砍，讓核心贏家在多頭續抱。
+                    # 危機側（波動升破→Sat 回流 Core / freeze / stress）完全不動。
                     if self._daily_rotation.get('rotate_sat_profits_to_core', 0) >= 1.0:
                         _trim_book_alpha(
                             'satellite',
@@ -770,6 +936,9 @@ class EventDrivenBacktester:
                 # ━━ FIX: 使用 t-1 大盤數據（避免同日 lookahead） ━━
                 regime_ok = True
                 regime_scale = 1.0  # 曝險縮放（graduated mode）
+                market_strong = False
+                breadth_pct = np.nan
+                vix_val_for_regime = np.nan
                 if market_ma60 is not None:
                     try:
                         prev_date = dates[i - 1]
@@ -783,6 +952,7 @@ class EventDrivenBacktester:
                                     # 四段式曝險：100% / 70% / 40% / 0%
                                     above_60 = mkt_val > mkt_ma60
                                     above_20 = mkt_val > mkt_ma20 if not pd.isna(mkt_ma20) else above_60
+                                    market_strong = bool(above_60 and above_20)
                                     if above_60 and above_20:
                                         regime_scale = 1.0   # 強多頭：全力進場
                                     elif above_60 and not above_20:
@@ -828,6 +998,7 @@ class EventDrivenBacktester:
                         vix_idx = self._vix_series.index.get_indexer([prev_date], method='ffill')[0]
                         if vix_idx >= 0:
                             vix_val = float(self._vix_series.iloc[vix_idx])
+                            vix_val_for_regime = vix_val
                             if vix_val > 33:
                                 pass  # 高恐慌：依策略訊號建倉，不額外壓制
                             elif vix_val > 30:
@@ -838,6 +1009,31 @@ class EventDrivenBacktester:
                                 regime_scale *= 0.85
                     except Exception:
                         pass
+
+                if (self.regime_sizing and regime_ok and market_strong
+                        and not pd.isna(breadth_pct)
+                        and breadth_pct >= self.strong_breadth_min):
+                    if self._vix_series is not None and pd.isna(vix_val_for_regime):
+                        try:
+                            prev_date = dates[i - 1]
+                            vix_idx = self._vix_series.index.get_indexer([prev_date], method='ffill')[0]
+                            if vix_idx >= 0:
+                                vix_val_for_regime = float(self._vix_series.iloc[vix_idx])
+                        except Exception:
+                            pass
+                    if not pd.isna(vix_val_for_regime) and vix_val_for_regime <= self.strong_vix_max:
+                        # 分段強勢加碼：基段 = strong_regime_mult；若 strong_tiers 提供，
+                        # 取「breadth 更高且 VIX 更低」的更高段倍數（條件越強加碼越大）。
+                        boost_mult = self.strong_regime_mult
+                        if self.strong_tiers:
+                            for t_breadth, t_vix, t_mult in self.strong_tiers:
+                                if (breadth_pct >= t_breadth
+                                        and vix_val_for_regime <= t_vix):
+                                    boost_mult = max(boost_mult, t_mult)
+                        regime_scale = min(
+                            self.max_regime_scale,
+                            regime_scale * boost_mult,
+                        )
 
                 candidates = []
                 if regime_ok:
@@ -1240,9 +1436,9 @@ class EventDrivenBacktester:
 
                     if capital >= actual_cost:
                         shares = trade_amount / actual_entry
-                        capital -= actual_cost
 
                         # 計算 TP/SL 價格（基於實際進場價含滑價）
+                        atr_val = np.nan
                         if self.tp_sl_mode == 'atr' and atr is not None:
                             atr_val = atr[ticker].iloc[i - 1] if i - 1 >= 0 else np.nan
                             if pd.isna(atr_val) or atr_val <= 0:
@@ -1255,6 +1451,20 @@ class EventDrivenBacktester:
                         else:
                             tp_price = actual_entry * (1 + self.tp_pct)
                             sl_price = actual_entry * (1 - self.sl_pct)
+
+                        reject_entry, reject_info = self._low_wr_rr_reject(
+                            ticker, ticker_history, tp_price, sl_price, actual_entry,
+                        )
+                        if reject_entry:
+                            self._rejected_entry_log.append({
+                                'date': str(date),
+                                'ticker': ticker,
+                                'reason': 'low_wr_rr_gate',
+                                **reject_info,
+                            })
+                            continue
+
+                        capital -= actual_cost
 
                         active_trades[ticker] = {
                             'shares': shares,
