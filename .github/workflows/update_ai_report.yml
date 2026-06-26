@@ -38,6 +38,10 @@ concurrency:
   group: ai-report-main
   cancel-in-progress: false
 
+# 讓 workflow 的 GITHUB_TOKEN 能 commit/push 回 repo（repo 預設唯讀時必要）
+permissions:
+  contents: write
+
 jobs:
   generate-report:
     runs-on: ubuntu-latest
