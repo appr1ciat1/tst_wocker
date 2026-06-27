@@ -75,7 +75,67 @@ def run_all():
         })
         print(f"   {disp}: ann={m.get('ann_return',0)*100:.1f}% MDD={m.get('max_drawdown_pct',0)*100:.1f}% "
               f"Sharpe={m.get('sharpe',0):.2f} 交易={m.get('total_trades',0)}")
-    return out, spro_eq, spro_trades
+    return out, spro_eq, spro_trades, data
+
+
+def recent_buy_signal_rounds(data, top_k=7, threshold=2.0, n_rounds=3, round_len=10):
+    """近 n_rounds×round_len 個台股交易日的「歷史買進訊號」，每輪列出買進訊號 ≥2 次的標的。
+
+    買進訊號＝四策略共用的 v8.5 動量評分（momentum_v85.prepare）每日選股：
+    score≥threshold 且 close>ma_long 且在流動性池內，取當日 Top-K。
+    每 round_len 個交易日為一輪，回傳 n_rounds 輪（最新一輪在前）。
+    """
+    bundle = get_strategy("momentum_v85").prepare(data)
+    score = bundle.total_score
+    eligible = score >= threshold
+    if bundle.ma_long is not None:
+        eligible = eligible & (data.close.reindex_like(score) > bundle.ma_long)
+    if data.universe_mask is not None:
+        eligible = eligible & data.universe_mask.reindex_like(score).fillna(False)
+    masked = score.where(eligible)
+    ranks = masked.rank(axis=1, ascending=False)
+    selected = (ranks <= top_k) & masked.notna()
+
+    dates = list(selected.index)
+    if len(dates) < round_len:
+        return []
+    need = n_rounds * round_len
+    tail_dates = dates[-need:] if len(dates) >= need else dates
+
+    # 代號→股名（best-effort，用法人快照的 code/name；失敗就只顯示代號）
+    names = {}
+    try:
+        from twstk.data.institutional import fetch_stock_three_inst_latest
+        for x in (fetch_stock_three_inst_latest() or []):
+            names[str(x.get("code"))] = x.get("name", "")
+    except Exception:
+        names = {}
+
+    def _name(code):
+        c = str(code).split(".")[0]
+        return names.get(c, "")
+
+    rounds = []
+    for ri in range(n_rounds):
+        end_i = len(tail_dates) - ri * round_len
+        start_i = end_i - round_len
+        if start_i < 0:
+            break
+        rdates = tail_dates[start_i:end_i]
+        if not rdates:
+            break
+        sub = selected.loc[rdates]
+        counts = sub.sum(axis=0)
+        counts = counts[counts >= 2].sort_values(ascending=False)
+        stocks = [(str(c).split(".")[0], _name(c), int(counts[c])) for c in counts.index][:30]
+        rounds.append({
+            "idx": ri + 1,
+            "start": str(pd.Timestamp(rdates[0]).date()),
+            "end": str(pd.Timestamp(rdates[-1]).date()),
+            "n_days": len(rdates),
+            "stocks": stocks,
+        })
+    return rounds
 
 
 def two_month(spro_eq, spro_trades):
@@ -165,7 +225,7 @@ def today_signals():
     return latest, sigs
 
 
-def build_html(results, sig_file, signals, sells, tm_stats, tm_trades):
+def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_rounds=None):
     today = date.today().strftime("%Y-%m-%d")
     # 摘要表
     rows = ""
@@ -245,6 +305,34 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades):
     else:
         tm_html = "<p style='color:#94a3b8'>資料不足。</p>"
 
+    # 近 30 日歷史買進訊號（3 輪 × 10 交易日，每輪 ≥2 次）
+    if buy_rounds:
+        round_blocks = ""
+        for rd in buy_rounds:
+            tag = "（最新）" if rd["idx"] == 1 else ""
+            if rd["stocks"]:
+                srows = "".join(
+                    f"<tr><td>{code}{(' ' + nm) if nm else ''}</td>"
+                    f"<td><b style='color:#fda4af'>{cnt}</b> / {rd['n_days']} 日</td></tr>"
+                    for code, nm, cnt in rd["stocks"]
+                )
+                stbl = ("<table><tr><th>股票</th><th>買進訊號次數</th></tr>"
+                        f"{srows}</table>")
+            else:
+                stbl = "<p style='color:#94a3b8'>本輪無出現 ≥2 次買進訊號的標的。</p>"
+            round_blocks += (
+                f"<h3 style='font-size:.98rem;margin:14px 0 4px;color:#fcd34d'>"
+                f"第 {rd['idx']} 輪{tag} · {rd['start']} → {rd['end']}</h3>{stbl}"
+            )
+        rounds_html = (
+            "<p style='color:#94a3b8'>買進訊號＝四策略共用的 v8.5 動量評分每日 Top-7 選股"
+            "（score≥2.0 且站上 60MA 且在流動性池內）。每 10 個台股交易日為一輪，列出該輪內"
+            "出現買進訊號 <b>≥2 次</b>的標的，依次數由多到少；最新一輪在最前。</p>"
+            f"{round_blocks}"
+        )
+    else:
+        rounds_html = "<p style='color:#94a3b8'>資料不足，無法計算歷史買進訊號。</p>"
+
     return f"""<!DOCTYPE html>
 <html lang="zh-TW"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -282,6 +370,9 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades):
  <h2>📋 今日買賣訊號（SURGE PRO，最強策略）</h2>
  <div class="card">{sig_html}</div>
 
+ <h2>🔁 近 30 日歷史買進訊號（3 輪 × 10 交易日，每輪 ≥2 次）</h2>
+ <div class="card">{rounds_html}</div>
+
  <h2>🗓️ SURGE PRO 過去兩個月</h2>
  <div class="card">{tm_html}</div>
 
@@ -309,11 +400,12 @@ new Chart(document.getElementById('eq').getContext('2d'),{{
 
 
 def main():
-    results, spro_eq, spro_trades = run_all()
+    results, spro_eq, spro_trades, data = run_all()
     sig_file, signals = today_signals()
     sells = recent_sells(spro_trades, n_days=7)
     tm_stats, tm_trades = two_month(spro_eq, spro_trades)
-    html = build_html(results, sig_file, signals, sells, tm_stats, tm_trades)
+    buy_rounds = recent_buy_signal_rounds(data)
+    html = build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_rounds)
     with open(HTML_FILE, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"✅ 已產出 {HTML_FILE}（四策略 + 折線圖 + 當日訊號，無 v9 內容）")
