@@ -77,7 +77,7 @@ jobs:
             --hold-days ${{ github.event.inputs.hold_days || '20' }} \
             --top-k ${{ github.event.inputs.top_k || '7' }} \
             --gap-filter ${{ github.event.inputs.gap_filter || '1.5' }} \
-            --days ${{ github.event.inputs.days || '1200' }}
+            --start-date 2019-01-01 --eval-start 2019-01-01
           sed -e 's#backtest_chart.png#chart_v85.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · v8.5 基準(純動量)#g' \
               stock_report.html > report_v85.html
@@ -90,7 +90,7 @@ jobs:
           python ai_report.py \
             --no-hybrid-tiered --consec-loss-limit 3 \
             --sl-atr 3.5 --regime-floor 0.0 --dynamic-topk \
-            --days ${{ github.event.inputs.days || '1200' }}
+            --start-date 2019-01-01 --eval-start 2019-01-01
           sed -e 's#backtest_chart.png#chart_guard.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · GUARD 去風險#g' \
               stock_report.html > report_guard.html
@@ -107,7 +107,7 @@ jobs:
             --regime-sizing --strong-regime-mult 1.25 --strong-breadth-min 0.55 \
             --strong-vix-max 25.0 --max-regime-scale 1.7 \
             --strong-tiers "0.65,20,1.45;0.75,15,1.75" \
-            --days ${{ github.event.inputs.days || '1200' }}
+            --start-date 2019-01-01 --eval-start 2019-01-01
           sed -e 's#backtest_chart.png#chart_surge.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE 強勢加碼#g' \
               stock_report.html > report_surge.html
@@ -124,7 +124,7 @@ jobs:
             --regime-sizing --strong-regime-mult 1.25 --strong-breadth-min 0.55 \
             --strong-vix-max 28.0 --max-regime-scale 1.9 \
             --strong-tiers "0.62,18,1.7;0.72,15,1.85" \
-            --days ${{ github.event.inputs.days || '1200' }}
+            --start-date 2019-01-01 --eval-start 2019-01-01
           # report_surge_pro.html 用自己的圖檔；保留 stock_report.html + backtest_chart.png 當主報表
           sed -e 's#backtest_chart.png#chart_surge_pro.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE PRO 追最高報酬#g' \
