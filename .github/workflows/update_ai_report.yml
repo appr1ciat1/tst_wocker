@@ -133,9 +133,10 @@ jobs:
           # 主報表 stock_report.html 的標題也改成 SURGE PRO（它就是最強策略）
           sed -i 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE PRO 追最高報酬#g' stock_report.html
 
-      - name: Paper Trading Tracker
+      # Paper 頁：四策略全期權益曲線比較 + 當日 SURGE PRO 訊號（乾淨版，無 v9 內容）
+      - name: Paper page (四策略比較)
         if: github.event.schedule != '0 10 1 * *'
-        run: python paper_tracker.py
+        run: python build_paper_page.py
 
       - name: Monthly Paper Trading Report
         if: github.event.schedule == '0 10 1 * *'
