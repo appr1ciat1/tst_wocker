@@ -165,9 +165,26 @@ def _build_inst_section():
     if not up_list and not down_list:
         return '<h2>🏛️ 三大法人籌碼動態</h2><p class="section-note">⚠️ 無籌碼數據</p>'
 
-    # 過濾 ETF（code 5 碼以上通常為 ETF）
-    up_stocks = [x for x in up_list if len(x.get('code', '')) == 4][:15]
-    down_stocks = [x for x in down_list if len(x.get('code', '')) == 4][:15]
+    # 過濾 ETF（code 5 碼以上通常為 ETF）+ 防呆：丟棄估計發散的異常值。
+    # 資料源的 three_inst_ratio_est 對流動性低的小型股會發散到數百 %（例：蜜望實
+    # 388%/+135pp），持股比率 >100% 或 20 日變化 >40pp 不可能，多為雜訊，過濾掉
+    # 以免洗版真正的法人買賣超龍頭（資料源亦已修正，此為雙重保險）。
+    def _sane(x):
+        r = x.get('three_inst_ratio', 0.0) or 0.0
+        c = x.get('change', 0.0) or 0.0
+        return len(x.get('code', '')) == 4 and 0.0 <= r <= 100.0 and abs(c) <= 40.0
+    up_stocks = [x for x in up_list if _sane(x)][:15]
+    down_stocks = [x for x in down_list if _sane(x)][:15]
+    # 法人資料 as-of 日期（資料源新版已在每筆 record 帶 date 欄）；讓快照日期與
+    # 報表日期解耦、可被肉眼稽核，避免報表日期前進但法人表凍結卻看不出來。
+    _asof = ''
+    for _lst in (up_list, down_list):
+        for _x in _lst:
+            if _x.get('date'):
+                _asof = _x['date']
+                break
+        if _asof:
+            break
 
     # 買超表
     buy_rows = ""
@@ -207,10 +224,13 @@ def _build_inst_section():
             f'</tr>\n'
         )
 
+    _asof_html = (
+        f'｜資料截至 <b style="color:#FFD54F;">{_asof}</b>' if _asof else ''
+    )
     html = f"""
     <h2>🏛️ 三大法人籌碼動態</h2>
     <p class="section-note">
-        近 20 日三大法人（外資+投信+自營商）持股比重變化排名。Data: <a href="https://github.com/appr1ciat1/tw-institutional-stocker" style="color:#4FC3F7;">appr1ciat1/tw-institutional-stocker</a>
+        近 20 日三大法人（外資+投信+自營商）持股比重變化排名{_asof_html}。Data: <a href="https://github.com/appr1ciat1/tw-institutional-stocker" style="color:#4FC3F7;">appr1ciat1/tw-institutional-stocker</a>
     </p>
     <div class="split-grid">
         <div>
