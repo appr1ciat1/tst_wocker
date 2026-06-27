@@ -1111,8 +1111,8 @@ def generate_html(data):
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Paper Trading v9 (Hybrid Tiered) — {today}</title>
-    <meta name="description" content="TW Stocker v9 Hybrid Tiered Paper Trading 實時績效追蹤（雙 book + Tiered scales + Risk-Adjusted）">
+    <title>Paper Trading · SURGE PRO — {today}</title>
+    <meta name="description" content="TW Stocker Paper Trading 實時績效追蹤 — 追蹤 SURGE PRO（最強策略：去風險 + 分段強勢加碼）的每日訊號">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
@@ -1197,7 +1197,7 @@ def generate_html(data):
 </head>
 <body>
 <div class="container">
-    <h1>📈 Paper Trading v9 <span style="font-size:0.6em;color:#a78bfa">Hybrid Tiered Risk Budgeting</span></h1>
+    <h1>📈 Paper Trading <span style="font-size:0.6em;color:#fda4af">· SURGE PRO（最強策略 · 分段強勢加碼）</span></h1>
     <p class="subtitle">
         <span class="badge badge-live">● LIVE</span>
         起始日 {data['start_date']} | 更新 {today} | 初始資金 {initial:,.0f} | Core-Satellite 分層 + Portfolio Vol Targeting (目標 {tiered_target:.0f}%)

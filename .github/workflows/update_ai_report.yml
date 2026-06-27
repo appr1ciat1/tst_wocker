@@ -62,7 +62,28 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # v8.5 約束優化策略 GUARD（去風險、不加碼、最穩健）→ report_guard.html
+      # ── 四個策略各自產報表；每份用 sed 把標題改成各自策略名（避免全顯示 v8.5 混淆）──
+      # 執行順序：v8.5 → GUARD → SURGE → SURGE PRO（最後）。最後一個 ai_report 寫的
+      # artifacts/orders_<date>.json 與 stock_report.html 即 paper 追蹤的對象，故 SURGE PRO 最後跑。
+
+      # v8.5 純 baseline（binary regime，無 graduated/breadth/加碼）→ report_v85.html
+      - name: v8.5 baseline report (report_v85.html)
+        if: github.event.schedule != '0 10 1 * *'
+        run: |
+          python ai_report.py \
+            --no-hybrid-tiered --no-regime-graduated --no-breadth-regime --consec-loss-limit 3 \
+            --tp-atr ${{ github.event.inputs.tp_atr || '4.0' }} \
+            --sl-atr ${{ github.event.inputs.sl_atr || '3.0' }} \
+            --hold-days ${{ github.event.inputs.hold_days || '20' }} \
+            --top-k ${{ github.event.inputs.top_k || '7' }} \
+            --gap-filter ${{ github.event.inputs.gap_filter || '1.5' }} \
+            --days ${{ github.event.inputs.days || '1200' }}
+          sed -e 's#backtest_chart.png#chart_v85.png#g' \
+              -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · v8.5 基準(純動量)#g' \
+              stock_report.html > report_v85.html
+          mv backtest_chart.png chart_v85.png
+
+      # GUARD（去風險、不加碼、最穩健）→ report_guard.html
       - name: GUARD report (mom_guard)
         if: github.event.schedule != '0 10 1 * *'
         run: |
@@ -70,10 +91,12 @@ jobs:
             --no-hybrid-tiered --consec-loss-limit 3 \
             --sl-atr 3.5 --regime-floor 0.0 --dynamic-topk \
             --days ${{ github.event.inputs.days || '1200' }}
-          sed 's#backtest_chart.png#chart_guard.png#g' stock_report.html > report_guard.html
+          sed -e 's#backtest_chart.png#chart_guard.png#g' \
+              -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · GUARD 去風險#g' \
+              stock_report.html > report_guard.html
           mv backtest_chart.png chart_guard.png
 
-      # v8.5 約束優化策略 SURGE（去風險 + 分段強勢加碼、追更高報酬）→ report_surge.html
+      # SURGE（去風險 + 分段強勢加碼、追更高報酬）→ report_surge.html
       - name: SURGE report (mom_surge)
         if: github.event.schedule != '0 10 1 * *'
         run: |
@@ -85,11 +108,13 @@ jobs:
             --strong-vix-max 25.0 --max-regime-scale 1.7 \
             --strong-tiers "0.65,20,1.45;0.75,15,1.75" \
             --days ${{ github.event.inputs.days || '1200' }}
-          sed 's#backtest_chart.png#chart_surge.png#g' stock_report.html > report_surge.html
+          sed -e 's#backtest_chart.png#chart_surge.png#g' \
+              -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE 強勢加碼#g' \
+              stock_report.html > report_surge.html
           mv backtest_chart.png chart_surge.png
 
-      # v8.5 約束優化策略 SURGE PRO（更激進分段加碼、追最高報酬，2022 較弱）→ report_surge_pro.html
-      - name: SURGE PRO report (mom_surge_pro)
+      # SURGE PRO（更激進分段加碼、最強）→ 最後跑：stock_report.html(主報表)與 orders = SURGE PRO，paper 追此策略
+      - name: SURGE PRO report (mom_surge_pro) — 最後跑，paper 追蹤此策略
         if: github.event.schedule != '0 10 1 * *'
         run: |
           python ai_report.py \
@@ -100,21 +125,13 @@ jobs:
             --strong-vix-max 28.0 --max-regime-scale 1.9 \
             --strong-tiers "0.62,18,1.7;0.72,15,1.85" \
             --days ${{ github.event.inputs.days || '1200' }}
-          sed 's#backtest_chart.png#chart_surge_pro.png#g' stock_report.html > report_surge_pro.html
-          mv backtest_chart.png chart_surge_pro.png
-
-      # v8.5 純 baseline（binary regime，無 graduated/breadth/加碼）→ stock_report.html（主報表 + 當日信號）
-      - name: v8.5 baseline report (stock_report.html)
-        if: github.event.schedule != '0 10 1 * *'
-        run: |
-          python ai_report.py \
-            --no-hybrid-tiered --no-regime-graduated --no-breadth-regime --consec-loss-limit 3 \
-            --tp-atr ${{ github.event.inputs.tp_atr || '4.0' }} \
-            --sl-atr ${{ github.event.inputs.sl_atr || '3.0' }} \
-            --hold-days ${{ github.event.inputs.hold_days || '20' }} \
-            --top-k ${{ github.event.inputs.top_k || '7' }} \
-            --gap-filter ${{ github.event.inputs.gap_filter || '1.5' }} \
-            --days ${{ github.event.inputs.days || '1200' }}
+          # report_surge_pro.html 用自己的圖檔；保留 stock_report.html + backtest_chart.png 當主報表
+          sed -e 's#backtest_chart.png#chart_surge_pro.png#g' \
+              -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE PRO 追最高報酬#g' \
+              stock_report.html > report_surge_pro.html
+          cp backtest_chart.png chart_surge_pro.png
+          # 主報表 stock_report.html 的標題也改成 SURGE PRO（它就是最強策略）
+          sed -i 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE PRO 追最高報酬#g' stock_report.html
 
       - name: Paper Trading Tracker
         if: github.event.schedule != '0 10 1 * *'
@@ -136,8 +153,8 @@ jobs:
           git config --global user.name "Voidful"
 
           git add stock_report.html backtest_chart.png paper_trading.html paper_equity.json || true
-          git add report_guard.html chart_guard.png report_surge.html chart_surge.png index.html || true
-          git add report_surge_pro.html chart_surge_pro.png || true
+          git add report_v85.html chart_v85.png report_guard.html chart_guard.png index.html || true
+          git add report_surge.html chart_surge.png report_surge_pro.html chart_surge_pro.png || true
           git add -u artifacts || true
 
           if git diff --cached --quiet; then
