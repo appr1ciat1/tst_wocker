@@ -2,8 +2,9 @@ name: AI Quant Trading Report v9
 
 on:
   schedule:
-    # 每週一到五 UTC 09:17 執行（台灣時間 17:17 收盤後，避開 GitHub Actions 整點高峰）
-    - cron: '17 9 * * 1-5'
+    # 每週一到六 UTC 09:17（台灣時間 17:17 收盤後）。含週六以涵蓋台股「補班補課」交易日；
+    # 實際是否為交易日由下方 "Check Taiwan trading day" 步驟用 XTAI 行事曆判定，非交易日自動跳過。
+    - cron: '17 9 * * 1-6'
     # 每月 1 日 UTC 10:00 跑月報
     - cron: '0 10 1 * *'
   workflow_dispatch:
@@ -62,13 +63,35 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # 用 XTAI（台股）行事曆判定「今天台灣時間是否為交易日」。
+      # 排程在非交易日（含週末、國定假日）會自動跳過；手動 workflow_dispatch 一律執行。
+      - name: Check Taiwan trading day
+        id: twcheck
+        run: |
+          python - <<'PY'
+          import os, datetime
+          is_trading = True
+          if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+              try:
+                  import exchange_calendars as xcals, pandas as pd
+                  tw = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).date()
+                  is_trading = bool(xcals.get_calendar("XTAI").is_session(pd.Timestamp(tw)))
+                  print("台灣日期", tw, "交易日?", is_trading)
+              except Exception as e:
+                  print("行事曆判定失敗，預設執行:", e); is_trading = True
+          else:
+              print("手動觸發 → 一律執行")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"is_trading={'true' if is_trading else 'false'}\n")
+          PY
+
       # ── 四個策略各自產報表；每份用 sed 把標題改成各自策略名（避免全顯示 v8.5 混淆）──
       # 執行順序：v8.5 → GUARD → SURGE → SURGE PRO（最後）。最後一個 ai_report 寫的
       # artifacts/orders_<date>.json 與 stock_report.html 即 paper 追蹤的對象，故 SURGE PRO 最後跑。
 
       # v8.5 純 baseline（binary regime，無 graduated/breadth/加碼）→ report_v85.html
       - name: v8.5 baseline report (report_v85.html)
-        if: github.event.schedule != '0 10 1 * *'
+        if: github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.is_trading == 'true'
         run: |
           python ai_report.py \
             --no-hybrid-tiered --no-regime-graduated --no-breadth-regime --consec-loss-limit 3 \
@@ -85,7 +108,7 @@ jobs:
 
       # GUARD（去風險、不加碼、最穩健）→ report_guard.html
       - name: GUARD report (mom_guard)
-        if: github.event.schedule != '0 10 1 * *'
+        if: github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.is_trading == 'true'
         run: |
           python ai_report.py \
             --no-hybrid-tiered --consec-loss-limit 3 \
@@ -98,7 +121,7 @@ jobs:
 
       # SURGE（去風險 + 分段強勢加碼、追更高報酬）→ report_surge.html
       - name: SURGE report (mom_surge)
-        if: github.event.schedule != '0 10 1 * *'
+        if: github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.is_trading == 'true'
         run: |
           python ai_report.py \
             --no-hybrid-tiered --consec-loss-limit 3 \
@@ -115,7 +138,7 @@ jobs:
 
       # SURGE PRO（更激進分段加碼、最強）→ 最後跑：stock_report.html(主報表)與 orders = SURGE PRO，paper 追此策略
       - name: SURGE PRO report (mom_surge_pro) — 最後跑，paper 追蹤此策略
-        if: github.event.schedule != '0 10 1 * *'
+        if: github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.is_trading == 'true'
         run: |
           python ai_report.py \
             --no-hybrid-tiered --consec-loss-limit 3 \
@@ -135,7 +158,7 @@ jobs:
 
       # Paper 頁：四策略全期權益曲線比較 + 當日 SURGE PRO 訊號（乾淨版，無 v9 內容）
       - name: Paper page (四策略比較)
-        if: github.event.schedule != '0 10 1 * *'
+        if: github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.is_trading == 'true'
         run: python build_paper_page.py
 
       - name: Monthly Paper Trading Report

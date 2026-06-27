@@ -49,6 +49,8 @@ def run_all():
     exec_cfg = ExecConfig(initial_capital=CAPITAL, top_k=7, threshold=2.0)
 
     out = []
+    spro_eq = None
+    spro_trades = None
     for disp, reg, color, desc in STRATS:
         print(f"▶ 回測 {disp} ({reg}) ...")
         strat = get_strategy(reg)
@@ -56,6 +58,8 @@ def run_all():
         m = compute_risk_metrics(equity, trades, CAPITAL)
         eq = (equity["Equity"] if "Equity" in equity.columns else equity.iloc[:, 0]).sort_index()
         eq = eq.dropna()
+        if reg == "mom_surge_pro":
+            spro_eq, spro_trades = eq, trades
         norm = (eq / eq.iloc[0] * 100.0)
         dates = [d.strftime("%Y-%m-%d") for d in norm.index]
         vals = [round(float(v), 2) for v in norm.values]
@@ -71,7 +75,71 @@ def run_all():
         })
         print(f"   {disp}: ann={m.get('ann_return',0)*100:.1f}% MDD={m.get('max_drawdown_pct',0)*100:.1f}% "
               f"Sharpe={m.get('sharpe',0):.2f} 交易={m.get('total_trades',0)}")
-    return out
+    return out, spro_eq, spro_trades
+
+
+def two_month(spro_eq, spro_trades):
+    """SURGE PRO 過去兩個月（最後 ~60 日曆天）的指標 + 交易紀錄。"""
+    if spro_eq is None or len(spro_eq) < 5:
+        return {}, []
+    last = spro_eq.index[-1]
+    start = last - pd.Timedelta(days=61)
+    eq2 = spro_eq[spro_eq.index >= start]
+    if len(eq2) < 5:
+        eq2 = spro_eq.tail(42)
+    # 交易：以該區間「出場日」計
+    rows = []
+    if spro_trades is not None and not spro_trades.empty and "Exit_Date" in spro_trades.columns:
+        td = spro_trades.copy()
+        td["_ex"] = pd.to_datetime(td["Exit_Date"], errors="coerce")
+        td = td[td["_ex"] >= start].sort_values("_ex", ascending=False)
+        for _, r in td.iterrows():
+            rows.append({
+                "ticker": r.get("Ticker"), "entry_d": str(r.get("Entry_Date")),
+                "exit_d": str(r.get("Exit_Date")), "entry_p": r.get("Entry_Price"),
+                "exit_p": r.get("Exit_Price"), "ret": float(r.get("Return_Pct", 0)),
+                "reason": str(r.get("Reason", "")), "days": int(r.get("Days_Held", 0)),
+            })
+    # 指標（以該區間權益）
+    rets = eq2.pct_change().dropna()
+    n = len(eq2)
+    total_ret = float(eq2.iloc[-1] / eq2.iloc[0] - 1) if n else 0.0
+    ann_vol = float(rets.std() * (252 ** 0.5)) if len(rets) > 1 else 0.0
+    sharpe = float(rets.mean() / rets.std() * (252 ** 0.5)) if rets.std() > 0 else 0.0
+    downside = rets[rets < 0]
+    dvol = float(downside.std() * (252 ** 0.5)) if len(downside) > 1 else 0.0
+    # 年化報酬（供 Sortino/Calmar）
+    yrs = n / 252 if n else 1
+    ann_ret = (1 + total_ret) ** (1 / yrs) - 1 if yrs > 0 and (1 + total_ret) > 0 else total_ret
+    sortino = float(ann_ret / dvol) if dvol > 0 else 0.0
+    cummax = eq2.cummax()
+    mdd = float((eq2 / cummax - 1).min())
+    calmar = float(ann_ret / abs(mdd)) if mdd != 0 else 0.0
+    wins = sum(1 for r in rows if r["ret"] > 0)
+    stats = {
+        "start": str(eq2.index[0].date()), "end": str(eq2.index[-1].date()),
+        "total_ret": total_ret, "ann_vol": ann_vol, "sharpe": sharpe,
+        "sortino": sortino, "mdd": mdd, "calmar": calmar,
+        "n_trades": len(rows), "win_rate": (wins / len(rows)) if rows else 0.0,
+    }
+    return stats, rows
+
+
+def recent_sells(spro_trades, n_days=7):
+    """SURGE PRO 近 n_days 的出場（賣出訊號）。"""
+    if spro_trades is None or spro_trades.empty or "Exit_Date" not in spro_trades.columns:
+        return []
+    td = spro_trades.copy()
+    td["_ex"] = pd.to_datetime(td["Exit_Date"], errors="coerce")
+    last = td["_ex"].max()
+    if pd.isna(last):
+        return []
+    td = td[td["_ex"] >= last - pd.Timedelta(days=n_days)].sort_values("_ex", ascending=False)
+    return [{
+        "ticker": r.get("Ticker"), "exit_d": str(r.get("Exit_Date")),
+        "exit_p": r.get("Exit_Price"), "ret": float(r.get("Return_Pct", 0)),
+        "reason": str(r.get("Reason", "")),
+    } for _, r in td.iterrows()]
 
 
 def today_signals():
@@ -97,7 +165,7 @@ def today_signals():
     return latest, sigs
 
 
-def build_html(results, sig_file, signals):
+def build_html(results, sig_file, signals, sells, tm_stats, tm_trades):
     today = date.today().strftime("%Y-%m-%d")
     # 摘要表
     rows = ""
@@ -119,19 +187,63 @@ def build_html(results, sig_file, signals):
             % (json.dumps(r["disp"]), json.dumps(r["vals"]), r["color"])
         )
     datasets_js = "[" + ",".join(datasets) + "]"
-    # 訊號
+    # 買進訊號
     if signals:
-        sig_rows = "".join(
+        buy_rows = "".join(
             f"<tr><td>{s['ticker']}</td><td>{s['entry']}</td><td>{s['tp']}</td>"
             f"<td>{s['sl']}</td><td>{s['exec'] or '-'}</td></tr>" for s in signals[:20]
         )
-        sig_html = (
-            f"<p style='color:#94a3b8'>來源：{os.path.basename(sig_file or '')}（SURGE PRO 最強策略當日計畫）</p>"
-            "<table><tr><th>股票</th><th>參考進場</th><th>停利</th><th>停損</th><th>執行日</th></tr>"
-            f"{sig_rows}</table>"
+        buy_html = ("<table><tr><th>股票</th><th>參考進場</th><th>停利</th><th>停損</th><th>執行日</th></tr>"
+                    f"{buy_rows}</table>")
+    else:
+        buy_html = "<p style='color:#94a3b8'>今日無新買進訊號。</p>"
+    # 賣出訊號（近 7 日出場）
+    if sells:
+        sell_rows = "".join(
+            f"<tr><td>{s['ticker']}</td><td>{s['exit_d']}</td><td>{s['exit_p']}</td>"
+            f"<td style='color:{'#4ade80' if s['ret']>0 else '#f87171'}'>{s['ret']*100:+.1f}%</td>"
+            f"<td>{s['reason']}</td></tr>" for s in sells[:20]
+        )
+        sell_html = ("<table><tr><th>股票</th><th>出場日</th><th>出場價</th><th>損益</th><th>原因</th></tr>"
+                     f"{sell_rows}</table>")
+    else:
+        sell_html = "<p style='color:#94a3b8'>近 7 日無出場。</p>"
+    sig_html = (
+        f"<p style='color:#94a3b8'>買進來源：{os.path.basename(sig_file or '')}（SURGE PRO 次一交易日進場計畫）。賣出＝近 7 日 TP/SL/時間到期出場。</p>"
+        f"<h3 style='font-size:.98rem;margin:6px 0 4px;color:#fda4af'>🟢 買進訊號</h3>{buy_html}"
+        f"<h3 style='font-size:.98rem;margin:14px 0 4px;color:#93c5fd'>🔴 賣出訊號</h3>{sell_html}"
+    )
+    # SURGE PRO 過去兩個月
+    if tm_stats:
+        def _m(label, val, good_high=True):
+            return f"<div class='kpi'><div class='kl'>{label}</div><div class='kv'>{val}</div></div>"
+        kpis = (
+            _m("報酬率", f"{tm_stats['total_ret']*100:+.1f}%")
+            + _m("波動率(年化)", f"{tm_stats['ann_vol']*100:.1f}%")
+            + _m("Sharpe", f"{tm_stats['sharpe']:.2f}")
+            + _m("Sortino", f"{tm_stats['sortino']:.2f}")
+            + _m("最大回撤", f"{tm_stats['mdd']*100:.1f}%")
+            + _m("Calmar", f"{tm_stats['calmar']:.2f}")
+            + _m("交易數", f"{tm_stats['n_trades']}")
+            + _m("勝率", f"{tm_stats['win_rate']*100:.0f}%")
+        )
+        if tm_trades:
+            tr_rows = "".join(
+                f"<tr><td>{t['ticker']}</td><td>{t['entry_d']}</td><td>{t['exit_d']}</td>"
+                f"<td>{t['entry_p']}</td><td>{t['exit_p']}</td>"
+                f"<td style='color:{'#4ade80' if t['ret']>0 else '#f87171'}'>{t['ret']*100:+.1f}%</td>"
+                f"<td>{t['reason']}</td><td>{t['days']}</td></tr>" for t in tm_trades[:60]
+            )
+            tr_table = ("<table><tr><th>股票</th><th>進場日</th><th>出場日</th><th>進場價</th><th>出場價</th>"
+                        f"<th>損益</th><th>原因</th><th>持有</th></tr>{tr_rows}</table>")
+        else:
+            tr_table = "<p style='color:#94a3b8'>此區間無已完成交易。</p>"
+        tm_html = (
+            f"<p style='color:#94a3b8'>區間 {tm_stats['start']} → {tm_stats['end']}（約兩個月，{tm_stats['n_trades']} 筆已完成交易）</p>"
+            f"<div class='kpis'>{kpis}</div>{tr_table}"
         )
     else:
-        sig_html = "<p style='color:#94a3b8'>今日無新買入訊號（或訂單檔尚未產生）。</p>"
+        tm_html = "<p style='color:#94a3b8'>資料不足。</p>"
 
     return f"""<!DOCTYPE html>
 <html lang="zh-TW"><head>
@@ -150,9 +262,12 @@ def build_html(results, sig_file, signals):
  td:first-child,th:first-child{{text-align:left}}
  .disclaimer{{color:#64748b;font-size:.8rem;margin-top:18px;line-height:1.6}}
  a{{color:#60a5fa}}
+ .kpis{{display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:10px;margin:6px 0 14px}}
+ .kpi{{background:#0f1b2e;border:1px solid #283449;border-radius:10px;padding:9px 11px}}
+ .kl{{color:#94a3b8;font-size:.72rem}} .kv{{font-size:1.12rem;font-weight:700;margin-top:2px}}
 </style></head><body><div class="wrap">
- <h1>📈 四策略績效比較</h1>
- <p class="sub">v8.5 / GUARD / SURGE / SURGE PRO 全期回測權益曲線（2019-01 → {today}，各自起點 normalize 為 100，log 軸）。資料更新：{today}。</p>
+ <h1>📈 Paper Trading · 四策略</h1>
+ <p class="sub">v8.5 / GUARD / SURGE / SURGE PRO 全期權益曲線（log 軸，起點=100）+ 最強 SURGE PRO 的當日買賣訊號與近兩個月績效。每個台股交易日收盤後自動更新。資料：{today}。</p>
 
  <div class="card">
    <canvas id="eq" height="150"></canvas>
@@ -164,8 +279,11 @@ def build_html(results, sig_file, signals):
    {rows}
  </table></div>
 
- <h2>📋 當日交易計畫（SURGE PRO，最強策略）</h2>
+ <h2>📋 今日買賣訊號（SURGE PRO，最強策略）</h2>
  <div class="card">{sig_html}</div>
+
+ <h2>🗓️ SURGE PRO 過去兩個月</h2>
+ <div class="card">{tm_html}</div>
 
  <div class="disclaimer">
    ⚠️ <b>免責：</b>此為回測模擬績效，<b>非真實交易、非未來保證</b>。四策略共用同一組 v8.5 評分（Mom×3 + Trend×1），
@@ -191,9 +309,11 @@ new Chart(document.getElementById('eq').getContext('2d'),{{
 
 
 def main():
-    results = run_all()
+    results, spro_eq, spro_trades = run_all()
     sig_file, signals = today_signals()
-    html = build_html(results, sig_file, signals)
+    sells = recent_sells(spro_trades, n_days=7)
+    tm_stats, tm_trades = two_month(spro_eq, spro_trades)
+    html = build_html(results, sig_file, signals, sells, tm_stats, tm_trades)
     with open(HTML_FILE, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"✅ 已產出 {HTML_FILE}（四策略 + 折線圖 + 當日訊號，無 v9 內容）")
