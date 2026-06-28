@@ -446,6 +446,28 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
         n90_ds_js = "[]"
         n90_note = "資料不足，無法繪製近 90 天權益曲線。"
 
+    # 選哪個策略？（依市場情境）——靜態對照表，與 index 首頁一致（用 paper 圖配色）
+    guide_html = (
+        "<p style=\"color:#94a3b8;margin:0 0 8px\">四策略<b>選股訊號與弱勢去風險邏輯完全相同</b>，"
+        "差別只在強勢時加碼的積極度與進場挑剔度。</p>"
+        "<table><tr><th>市場情境</th><th>最適策略</th><th>原因</th></tr>"
+        "<tr><td>🚀 強勢延續多頭、VIX 低、龍頭領漲</td><td><b style='color:#ef4444'>SURGE PRO</b></td>"
+        "<td>激進分段加碼，最大化報酬</td></tr>"
+        "<tr><td>📈 漲跌互現、長期向上的波段</td><td><b style='color:#f59e0b'>SURGE</b></td>"
+        "<td>去風險＋適度加碼，最佳平衡</td></tr>"
+        "<tr><td>🌊 廣泛齊漲（雨露均霑）</td><td><b style='color:#10b981'>GUARD</b> / <b style='color:#3b82f6'>v8.5</b></td>"
+        "<td>分散／滿倉廣泛參與勝過集中</td></tr>"
+        "<tr><td>〽️ 震盪盤整、方向不明</td><td><b style='color:#10b981'>GUARD</b> / <b style='color:#f59e0b'>SURGE</b></td>"
+        "<td>graduated 弱勢自動減碼保護</td></tr>"
+        "<tr><td>💥 升息／系統性崩盤（如 2022）</td><td><b style='color:#f59e0b'>SURGE</b>（最防守）</td>"
+        "<td>去風險＋不過度集中，崩盤年 OOS 最佳</td></tr>"
+        "</table>"
+        "<p style='color:#cbd5e1;font-size:.88rem;margin:12px 0 0;line-height:1.65'>"
+        "全期 2019–2026 數字 <b style='color:#ef4444'>SURGE PRO</b> 最強（年化／Sharpe／Calmar／PBO 皆居首）；"
+        "全天候平衡 <b style='color:#f59e0b'>SURGE</b> 最佳（回撤最淺 −21.5%、崩盤抗跌最好）。"
+        "<b>要榨乾回測優勢且能扛崩盤 → SURGE PRO；務實怕崩盤 → SURGE。</b></p>"
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="zh-TW"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -485,6 +507,9 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
    <p style="color:#94a3b8;margin:0 0 8px">{n90_note}</p>
    <canvas id="eq90" height="150"></canvas>
  </div>
+
+ <h2>📌 選哪個策略？（依市場情境）</h2>
+ <div class="card">{guide_html}</div>
 
  <h2>📋 今日買賣訊號（SURGE PRO，最強策略）</h2>
  <div class="card">{sig_html}</div>
