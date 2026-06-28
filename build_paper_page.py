@@ -51,6 +51,7 @@ def run_all():
     out = []
     spro_eq = None
     spro_trades = None
+    eq_map = {}
     for disp, reg, color, desc in STRATS:
         print(f"▶ 回測 {disp} ({reg}) ...")
         strat = get_strategy(reg)
@@ -58,6 +59,7 @@ def run_all():
         m = compute_risk_metrics(equity, trades, CAPITAL)
         eq = (equity["Equity"] if "Equity" in equity.columns else equity.iloc[:, 0]).sort_index()
         eq = eq.dropna()
+        eq_map[disp] = eq
         if reg == "mom_surge_pro":
             spro_eq, spro_trades = eq, trades
         norm = (eq / eq.iloc[0] * 100.0)
@@ -75,7 +77,92 @@ def run_all():
         })
         print(f"   {disp}: ann={m.get('ann_return',0)*100:.1f}% MDD={m.get('max_drawdown_pct',0)*100:.1f}% "
               f"Sharpe={m.get('sharpe',0):.2f} 交易={m.get('total_trades',0)}")
-    return out, spro_eq, spro_trades, data
+    return out, spro_eq, spro_trades, data, eq_map
+
+
+# 近 90 天權益曲線比較用的 ETF（台股 ETF；上市走 .TW，上櫃走 .TWO，下方自動後援）
+ETF_BENCH = [
+    ("00877", "復華中國5G", "#38bdf8"),
+    ("00735", "國泰臺韓科技", "#c084fc"),
+    ("00935", "野村臺灣新科技50", "#f472b6"),
+]
+
+
+def _fetch_etf_close(code, start_date, end_date):
+    """抓 ETF 買進持有淨值（起點=1）。先試 .TW（上市），無資料再試 .TWO（上櫃，如 00877）。"""
+    try:
+        from twstk.data import fetch_benchmark
+        s = fetch_benchmark(code, start_date=start_date, end_date=end_date)
+        if s is not None and len(s) >= 5:
+            return s
+    except Exception:
+        pass
+    try:
+        import numpy as np
+        import yfinance as yf
+        df = yf.download(f"{code}.TWO", start=start_date, end=end_date, progress=False)
+        if df is None or df.empty:
+            return None
+        close = df["Close"]
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        close = pd.to_numeric(close, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+        if len(close) < 5:
+            return None
+        return close / close.iloc[0]
+    except Exception:
+        return None
+
+
+def ninety_day_curves(eq_map, n_days=90):
+    """近 n_days 天：4 策略 + 3 ETF 的權益曲線（各自起點 normalize 為 100）。
+
+    策略走自身回測權益；ETF 走 fetch_benchmark(買進持有)。全部對齊到策略交易日 index、
+    截取最近 n_days 天、以視窗首日為 100 重新基準化，方便同圖比較。
+    """
+    if not eq_map:
+        return None
+    # 參考交易日 index：用最長的策略權益（四策略同 index，取任一）
+    ref = max(eq_map.values(), key=len).sort_index()
+    last = ref.index[-1]
+    start = last - pd.Timedelta(days=n_days)
+    win_idx = ref.index[ref.index >= start]
+    if len(win_idx) < 5:
+        return None
+
+    series = {}  # label -> (values list aligned to win_idx, color)
+    # 策略
+    for disp, _reg, color, _desc in STRATS:
+        eq = eq_map.get(disp)
+        if eq is None:
+            continue
+        s = eq.reindex(win_idx).ffill().bfill()
+        if s.isna().all() or float(s.iloc[0]) == 0:
+            continue
+        series[disp] = ([round(float(v) / float(s.iloc[0]) * 100.0, 2) for v in s.values], color)
+    # ETF（buy-and-hold；上市 .TW / 上櫃 .TWO 自動後援）
+    bstart = (start - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+    bend = (last + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+    for code, name, color in ETF_BENCH:
+        try:
+            bench = _fetch_etf_close(code, bstart, bend)
+            if bench is None or len(bench) < 5:
+                print(f"   ⚠️ ETF {code} 無資料，跳過")
+                continue
+            bench.index = pd.to_datetime(bench.index)
+            s = bench.reindex(win_idx).ffill().bfill()
+            if s.isna().all() or float(s.iloc[0]) == 0:
+                continue
+            label = f"{code} {name}"
+            series[label] = ([round(float(v) / float(s.iloc[0]) * 100.0, 2) for v in s.values], color)
+        except Exception as e:
+            print(f"   ⚠️ ETF {code} 抓取失敗: {e}")
+    if not series:
+        return None
+    labels = [d.strftime("%Y-%m-%d") for d in win_idx]
+    datasets = [{"label": lab, "data": vals, "color": col} for lab, (vals, col) in series.items()]
+    return {"labels": labels, "datasets": datasets,
+            "start": labels[0], "end": labels[-1], "n": len(labels)}
 
 
 def recent_buy_signal_rounds(data, top_k=7, threshold=2.0, n_rounds=3, round_len=10):
@@ -225,7 +312,7 @@ def today_signals():
     return latest, sigs
 
 
-def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_rounds=None):
+def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_rounds=None, ninety=None):
     today = date.today().strftime("%Y-%m-%d")
     # 摘要表
     rows = ""
@@ -333,6 +420,24 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
     else:
         rounds_html = "<p style='color:#94a3b8'>資料不足，無法計算歷史買進訊號。</p>"
 
+    # 近 90 天權益曲線（4 策略 + 3 ETF）
+    if ninety and ninety.get("datasets"):
+        n90_labels = json.dumps(ninety["labels"], ensure_ascii=False)
+        _ds = []
+        for d in ninety["datasets"]:
+            _ds.append(
+                "{label:%s,data:%s,borderColor:'%s',backgroundColor:'transparent',"
+                "fill:false,tension:0.2,pointRadius:0,borderWidth:2}"
+                % (json.dumps(d["label"], ensure_ascii=False), json.dumps(d["data"]), d["color"])
+            )
+        n90_ds_js = "[" + ",".join(_ds) + "]"
+        n90_note = (f"近 {ninety['n']} 個交易日（{ninety['start']} → {ninety['end']}）："
+                    "4 策略回測權益 vs 3 檔 ETF 買進持有，各自起點＝100（線性軸）。")
+    else:
+        n90_labels = "[]"
+        n90_ds_js = "[]"
+        n90_note = "資料不足，無法繪製近 90 天權益曲線。"
+
     return f"""<!DOCTYPE html>
 <html lang="zh-TW"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -367,6 +472,12 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
    {rows}
  </table></div>
 
+ <h2>📊 近 90 天權益曲線（4 策略 vs 3 ETF）</h2>
+ <div class="card">
+   <p style="color:#94a3b8;margin:0 0 8px">{n90_note}</p>
+   <canvas id="eq90" height="150"></canvas>
+ </div>
+
  <h2>📋 今日買賣訊號（SURGE PRO，最強策略）</h2>
  <div class="card">{sig_html}</div>
 
@@ -395,17 +506,33 @@ new Chart(document.getElementById('eq').getContext('2d'),{{
    }}
  }}
 }});
+var _n90ds={n90_ds_js};
+if(_n90ds.length){{
+new Chart(document.getElementById('eq90').getContext('2d'),{{
+ type:'line',
+ data:{{labels:{n90_labels},datasets:_n90ds}},
+ options:{{
+   responsive:true,animation:false,interaction:{{mode:'index',intersect:false}},
+   plugins:{{legend:{{labels:{{color:'#e2e8f0',boxWidth:12,font:{{size:11}}}}}},title:{{display:false}}}},
+   scales:{{
+     x:{{ticks:{{color:'#64748b',maxTicksLimit:8}},grid:{{color:'#1e293b'}}}},
+     y:{{ticks:{{color:'#64748b'}},grid:{{color:'#1e293b'}},title:{{display:true,text:'權益(起點=100)',color:'#94a3b8'}}}}
+   }}
+ }}
+}});
+}}
 </script>
 </body></html>"""
 
 
 def main():
-    results, spro_eq, spro_trades, data = run_all()
+    results, spro_eq, spro_trades, data, eq_map = run_all()
     sig_file, signals = today_signals()
     sells = recent_sells(spro_trades, n_days=7)
     tm_stats, tm_trades = two_month(spro_eq, spro_trades)
     buy_rounds = recent_buy_signal_rounds(data)
-    html = build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_rounds)
+    ninety = ninety_day_curves(eq_map, n_days=90)
+    html = build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_rounds, ninety)
     with open(HTML_FILE, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"✅ 已產出 {HTML_FILE}（四策略 + 折線圖 + 當日訊號，無 v9 內容）")
