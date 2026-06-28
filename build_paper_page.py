@@ -27,11 +27,12 @@ HTML_FILE = "paper_trading.html"
 CAPITAL = 1_000_000
 
 # (顯示名, 註冊名, 顏色, 一句說明)
+# 顏色採高對比、相互區隔的色相（紅/琥珀/綠/藍），四策略一目了然。
 STRATS = [
-    ("SURGE PRO", "mom_surge_pro", "#fda4af", "去風險 + 更激進分段加碼，報酬最高"),
-    ("SURGE",     "mom_surge",     "#fdba74", "去風險 + 分段強勢加碼"),
-    ("GUARD",     "mom_guard",     "#5eead4", "弱勢去風險，不加碼，最穩健"),
-    ("v8.5",      "momentum_v85",  "#a5b4fc", "純動量基準（優化前）"),
+    ("SURGE PRO", "mom_surge_pro", "#ef4444", "去風險 + 更激進分段加碼，報酬最高"),
+    ("SURGE",     "mom_surge",     "#f59e0b", "去風險 + 分段強勢加碼"),
+    ("GUARD",     "mom_guard",     "#10b981", "弱勢去風險，不加碼，最穩健"),
+    ("v8.5",      "momentum_v85",  "#3b82f6", "純動量基準（優化前）"),
 ]
 
 
@@ -81,10 +82,10 @@ def run_all():
 
 
 # 近 90 天權益曲線比較用的 ETF（台股 ETF；上市走 .TW，上櫃走 .TWO，下方自動後援）
+# ETF 用紫/粉色相 + 虛線，與四策略（紅/琥珀/綠/藍實線）明顯區隔。
 ETF_BENCH = [
-    ("00877", "復華中國5G", "#38bdf8"),
-    ("00735", "國泰臺韓科技", "#c084fc"),
-    ("00935", "野村臺灣新科技50", "#f472b6"),
+    ("00877", "復華中國5G", "#a855f7"),
+    ("00935", "野村臺灣新科技50", "#ec4899"),
 ]
 
 
@@ -130,8 +131,8 @@ def ninety_day_curves(eq_map, n_days=90):
     if len(win_idx) < 5:
         return None
 
-    series = {}  # label -> (values list aligned to win_idx, color)
-    # 策略
+    series = {}  # label -> (values list aligned to win_idx, color, is_etf_dashed)
+    # 策略（實線）
     for disp, _reg, color, _desc in STRATS:
         eq = eq_map.get(disp)
         if eq is None:
@@ -139,7 +140,7 @@ def ninety_day_curves(eq_map, n_days=90):
         s = eq.reindex(win_idx).ffill().bfill()
         if s.isna().all() or float(s.iloc[0]) == 0:
             continue
-        series[disp] = ([round(float(v) / float(s.iloc[0]) * 100.0, 2) for v in s.values], color)
+        series[disp] = ([round(float(v) / float(s.iloc[0]) * 100.0, 2) for v in s.values], color, False)
     # ETF（buy-and-hold；上市 .TW / 上櫃 .TWO 自動後援）
     bstart = (start - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
     bend = (last + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
@@ -154,13 +155,14 @@ def ninety_day_curves(eq_map, n_days=90):
             if s.isna().all() or float(s.iloc[0]) == 0:
                 continue
             label = f"{code} {name}"
-            series[label] = ([round(float(v) / float(s.iloc[0]) * 100.0, 2) for v in s.values], color)
+            series[label] = ([round(float(v) / float(s.iloc[0]) * 100.0, 2) for v in s.values], color, True)
         except Exception as e:
             print(f"   ⚠️ ETF {code} 抓取失敗: {e}")
     if not series:
         return None
     labels = [d.strftime("%Y-%m-%d") for d in win_idx]
-    datasets = [{"label": lab, "data": vals, "color": col} for lab, (vals, col) in series.items()]
+    datasets = [{"label": lab, "data": vals, "color": col, "dash": dash}
+                for lab, (vals, col, dash) in series.items()]
     return {"labels": labels, "datasets": datasets,
             "start": labels[0], "end": labels[-1], "n": len(labels)}
 
@@ -425,14 +427,20 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
         n90_labels = json.dumps(ninety["labels"], ensure_ascii=False)
         _ds = []
         for d in ninety["datasets"]:
+            dash = ",borderDash:[6,4]" if d.get("dash") else ""
             _ds.append(
                 "{label:%s,data:%s,borderColor:'%s',backgroundColor:'transparent',"
-                "fill:false,tension:0.2,pointRadius:0,borderWidth:2}"
-                % (json.dumps(d["label"], ensure_ascii=False), json.dumps(d["data"]), d["color"])
+                "fill:false,tension:0.2,pointRadius:0,borderWidth:2%s}"
+                % (json.dumps(d["label"], ensure_ascii=False), json.dumps(d["data"]), d["color"], dash)
             )
         n90_ds_js = "[" + ",".join(_ds) + "]"
-        n90_note = (f"近 {ninety['n']} 個交易日（{ninety['start']} → {ninety['end']}）："
-                    "4 策略回測權益 vs 3 檔 ETF 買進持有，各自起點＝100（線性軸）。")
+        n90_note = (
+            f"近 {ninety['n']} 個交易日（{ninety['start']} → {ninety['end']}）："
+            "4 策略回測權益（實線）vs ETF 買進持有（虛線），各自起點＝100（線性軸）。"
+            "<br>⚠️ 此窗為單向強漲段（大盤 0050 約 +40%）：不去風險的 v8.5 滿倉故短線報酬最高、"
+            "SURGE PRO 去風險最多（動態減碼）故短線最低——但 <b>全期年化反而是 SURGE PRO 最高</b>"
+            "（見上方摘要表），去風險的價值要在崩盤年才顯現。<b>短窗排序不代表長期優劣。</b>"
+        )
     else:
         n90_labels = "[]"
         n90_ds_js = "[]"
