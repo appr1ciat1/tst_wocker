@@ -27,6 +27,13 @@
         .stat { color: #94a3b8; font-size: .82rem; font-variant-numeric: tabular-nums; }
         .stat b { color: #e2e8f0; }
         footer { color: #64748b; font-size: .78rem; margin-top: 28px; text-align: center; }
+        .guide { background:#1e293b; border:1px solid #334155; border-radius:14px; padding:16px 20px; margin-top:20px; }
+        .guide h2 { font-size:1.12rem; margin:0 0 4px; }
+        .guide .gsub { color:#94a3b8; font-size:.85rem; margin:0 0 10px; }
+        .guide table { width:100%; border-collapse:collapse; font-size:.86rem; }
+        .guide th,.guide td { text-align:left; padding:7px 8px; border-bottom:1px solid #283449; }
+        .guide th { color:#94a3b8; font-weight:600; }
+        .guide .verdict { color:#cbd5e1; font-size:.88rem; margin:12px 0 0; line-height:1.65; }
     </style>
 </head>
 <body>
@@ -64,6 +71,19 @@
         <p class="desc">模擬交易追蹤（每日持倉與權益曲線）—— 追蹤 <b>SURGE PRO</b>（最強策略）的實盤訊號。</p>
         <p class="stat">每日更新</p>
       </a>
+    </div>
+    <div class="guide">
+      <h2>📌 選哪個策略？（依市場情境）</h2>
+      <p class="gsub">四策略<b>選股訊號與弱勢去風險邏輯完全相同</b>，差別只在「強勢時加碼的積極度」與「進場挑剔度」。</p>
+      <table>
+        <tr><th>市場情境</th><th>最適策略</th><th>原因</th></tr>
+        <tr><td>🚀 強勢延續多頭、VIX 低、龍頭領漲</td><td><b style="color:#fda4af">SURGE PRO</b></td><td>激進分段加碼，最大化報酬</td></tr>
+        <tr><td>📈 漲跌互現、長期向上的波段</td><td><b style="color:#fdba74">SURGE</b></td><td>去風險＋適度加碼，最佳平衡</td></tr>
+        <tr><td>🌊 廣泛齊漲（雨露均霑）</td><td><b style="color:#5eead4">GUARD</b> / <b style="color:#a5b4fc">v8.5</b></td><td>分散／滿倉廣泛參與勝過集中</td></tr>
+        <tr><td>〽️ 震盪盤整、方向不明</td><td><b style="color:#5eead4">GUARD</b> / <b style="color:#fdba74">SURGE</b></td><td>graduated 弱勢自動減碼保護</td></tr>
+        <tr><td>💥 升息／系統性崩盤（如 2022）</td><td><b style="color:#fdba74">SURGE</b>（最防守）</td><td>去風險＋不過度集中，崩盤年 OOS 最佳</td></tr>
+      </table>
+      <p class="verdict">全期 2019–2026 數字 <b style="color:#fda4af">SURGE PRO</b> 最強（年化／Sharpe／Calmar／PBO 皆居首）；全天候平衡 <b style="color:#fdba74">SURGE</b> 最佳（回撤最淺 −21.5%、崩盤抗跌最好）。<b>要榨乾回測優勢且能扛崩盤 → SURGE PRO；務實怕崩盤 → SURGE。</b>GUARD 多被 SURGE 支配，價值在「最單純、不依賴加碼判斷」。</p>
     </div>
     <footer>數字為 2019–2026 凍結回測（動態 Top-60），非未來保證。SURGE/GUARD 詳見 artifacts/v85_optimization_result.md。</footer>
   </div>
