@@ -151,117 +151,113 @@ def get_next_n_trading_days(from_date, n_days):
     return approx_date.strftime('%Y-%m-%d')
 
 
-def _build_inst_section():
-    """
-    建立三大法人籌碼動態 HTML section。
-    從 tw-institutional-stocker 抓取 20 日持股變化排名，呈現買超/賣超 Top-15。
-    """
+def _build_inst_category_block(category, title, color, value_header, value_fn):
+    """單一法人類別（外資/投信/自營商）的買超/賣超 Top-10 雙欄 HTML。"""
     try:
-        up_list = fetch_inst_rankings(20, 'up') or []
-        down_list = fetch_inst_rankings(20, 'down') or []
+        up_list = fetch_inst_rankings(20, 'up', category=category) or []
+        down_list = fetch_inst_rankings(20, 'down', category=category) or []
     except Exception:
-        return '<h2>🏛️ 三大法人籌碼動態</h2><p class="section-note">⚠️ 籌碼數據暫時無法取得</p>'
-
+        up_list, down_list = [], []
     if not up_list and not down_list:
-        return '<h2>🏛️ 三大法人籌碼動態</h2><p class="section-note">⚠️ 無籌碼數據</p>'
+        return f'<h3 style="color:{color};">{title}</h3><p class="section-note">⚠️ 無數據</p>'
 
-    # 過濾 ETF（code 5 碼以上通常為 ETF）+ 防呆：丟棄估計發散的異常值。
-    # 資料源的 three_inst_ratio_est 對流動性低的小型股會發散到數百 %（例：蜜望實
-    # 388%/+135pp），持股比率 >100% 或 20 日變化 >40pp 不可能，多為雜訊，過濾掉
-    # 以免洗版真正的法人買賣超龍頭（資料源亦已修正，此為雙重保險）。
+    # 過濾 ETF（code 5 碼以上通常為 ETF）+ 防呆：20 日變化 >40pp 不可能，
+    # 多為資料異常（資料源已過濾，此為雙重保險）。外資另檢查官方持股比率合理。
     def _sane(x):
-        r = x.get('three_inst_ratio', 0.0) or 0.0
         c = x.get('change', 0.0) or 0.0
-        return len(x.get('code', '')) == 4 and 0.0 <= r <= 100.0 and abs(c) <= 40.0
-    up_stocks = [x for x in up_list if _sane(x)][:15]
-    down_stocks = [x for x in down_list if _sane(x)][:15]
-    # 法人資料 as-of 日期（資料源新版已在每筆 record 帶 date 欄）；讓快照日期與
-    # 報表日期解耦、可被肉眼稽核，避免報表日期前進但法人表凍結卻看不出來。
-    _asof = ''
-    for _lst in (up_list, down_list):
-        for _x in _lst:
-            if _x.get('date'):
-                _asof = _x['date']
-                break
-        if _asof:
-            break
+        if len(x.get('code', '')) != 4 or abs(c) > 40.0:
+            return False
+        if category == 'foreign':
+            r = x.get('ratio', 0.0) or 0.0
+            return 0.0 <= r <= 100.0
+        return True
 
-    # 買超表
-    buy_rows = ""
-    for i, item in enumerate(up_stocks, 1):
-        code = item.get('code', '')
-        name = item.get('name', '')
-        change = item.get('change', 0.0)
-        ratio = item.get('three_inst_ratio', 0.0)
-        bar_width = min(change * 8, 100)
-        buy_rows += (
-            f'<tr>'
-            f'<td style="text-align:center;color:#888;">{i}</td>'
-            f'<td><b>{code}</b> {name}</td>'
-            f'<td style="text-align:right;color:#00ff00;font-weight:bold;">+{change:.1f}%</td>'
-            f'<td style="text-align:right;">{ratio:.1f}%</td>'
-            f'<td><div style="background:linear-gradient(90deg,#00ff0044 {bar_width}%,transparent {bar_width}%);'
-            f'height:18px;border-radius:3px;"></div></td>'
-            f'</tr>\n'
-        )
+    up_stocks = [x for x in up_list if _sane(x)][:10]
+    down_stocks = [x for x in down_list if _sane(x)][:10]
 
-    # 賣超表
-    sell_rows = ""
-    for i, item in enumerate(down_stocks, 1):
-        code = item.get('code', '')
-        name = item.get('name', '')
-        change = item.get('change', 0.0)
-        ratio = item.get('three_inst_ratio', 0.0)
-        bar_width = min(abs(change) * 8, 100)
-        sell_rows += (
-            f'<tr>'
-            f'<td style="text-align:center;color:#888;">{i}</td>'
-            f'<td><b>{code}</b> {name}</td>'
-            f'<td style="text-align:right;color:#ff4444;font-weight:bold;">-{abs(change):.1f}%</td>'
-            f'<td style="text-align:right;">{ratio:.1f}%</td>'
-            f'<td><div style="background:linear-gradient(90deg,#ff444444 {bar_width}%,transparent {bar_width}%);'
-            f'height:18px;border-radius:3px;"></div></td>'
-            f'</tr>\n'
-        )
+    def _rows(stocks, positive):
+        rows = ""
+        sign_color = '#00ff00' if positive else '#ff4444'
+        for i, item in enumerate(stocks, 1):
+            change = item.get('change', 0.0)
+            bar_width = min(abs(change) * 8, 100)
+            sign = '+' if change >= 0 else '-'
+            rows += (
+                f'<tr>'
+                f'<td style="text-align:center;color:#888;">{i}</td>'
+                f'<td><b>{item.get("code", "")}</b> {item.get("name", "")}</td>'
+                f'<td style="text-align:right;color:{sign_color};font-weight:bold;">{sign}{abs(change):.1f}pp</td>'
+                f'<td style="text-align:right;">{value_fn(item)}</td>'
+                f'<td><div style="background:linear-gradient(90deg,{sign_color}44 {bar_width}%,transparent {bar_width}%);'
+                f'height:18px;border-radius:3px;"></div></td>'
+                f'</tr>\n'
+            )
+        return rows
 
-    _asof_html = (
-        f'｜資料截至 <b style="color:#FFD54F;">{_asof}</b>' if _asof else ''
+    header = (
+        f'<thead><tr>'
+        f'<th style="width:30px;">#</th><th>股票</th>'
+        f'<th style="text-align:right;">20日變化</th>'
+        f'<th style="text-align:right;">{value_header}</th>'
+        f'<th style="width:80px;">幅度</th>'
+        f'</tr></thead>'
     )
-    html = f"""
-    <h2>🏛️ 三大法人籌碼動態</h2>
-    <p class="section-note">
-        近 20 日三大法人（外資+投信+自營商）持股比重變化排名{_asof_html}。Data: <a href="https://github.com/appr1ciat1/tw-institutional-stocker" style="color:#4FC3F7;">appr1ciat1/tw-institutional-stocker</a>
-    </p>
+    return f"""
+    <h3 style="color:{color};margin:14px 0 8px;">{title}</h3>
     <div class="split-grid">
         <div>
-            <h3 style="color:#00ff00;margin-bottom:8px;">🟢 法人買超 Top-15（20日）</h3>
-            <table style="width:100%;">
-                <thead><tr>
-                    <th style="width:30px;">#</th>
-                    <th>股票</th>
-                    <th style="text-align:right;">變化</th>
-                    <th style="text-align:right;">持股</th>
-                    <th style="width:80px;">幅度</th>
-                </tr></thead>
-                <tbody>{buy_rows}</tbody>
-            </table>
+            <table style="width:100%;">{header}<tbody>{_rows(up_stocks, True)}</tbody></table>
         </div>
         <div>
-            <h3 style="color:#ff4444;margin-bottom:8px;">🔴 法人賣超 Top-15（20日）</h3>
-            <table style="width:100%;">
-                <thead><tr>
-                    <th style="width:30px;">#</th>
-                    <th>股票</th>
-                    <th style="text-align:right;">變化</th>
-                    <th style="text-align:right;">持股</th>
-                    <th style="width:80px;">幅度</th>
-                </tr></thead>
-                <tbody>{sell_rows}</tbody>
-            </table>
+            <table style="width:100%;">{header}<tbody>{_rows(down_stocks, False)}</tbody></table>
         </div>
     </div>
 """
-    return html
+
+
+def _build_inst_section():
+    """
+    建立法人籌碼動態 HTML section。
+
+    外資／投信／自營商「分開」呈現各自的 20 日買超/賣超 Top-10
+    （資料源 2026-07 起提供分類排名檔；不再顯示三者合併的單一指標）。
+    """
+    def _fmt_ratio(item):
+        return f"{item.get('ratio', 0.0) or 0.0:.1f}%"
+
+    def _fmt_net_shares(item):
+        lots = (item.get('net_shares', 0) or 0) / 1000.0
+        return f"{lots:+,.0f} 張"
+
+    blocks = [
+        _build_inst_category_block(
+            'foreign', '🌍 外資（官方持股比率變化）', '#4FC3F7', '持股', _fmt_ratio),
+        _build_inst_category_block(
+            'trust', '🏦 投信（20日累計買賣超）', '#FFD54F', '買賣超', _fmt_net_shares),
+        _build_inst_category_block(
+            'dealer', '💼 自營商（20日累計買賣超）', '#CE93D8', '買賣超', _fmt_net_shares),
+    ]
+
+    # 資料 as-of 日期：從任一分類排名檔的 record 取（與報表價格日解耦、可稽核）
+    _asof = ''
+    try:
+        for _x in (fetch_inst_rankings(20, 'up', category='foreign') or []):
+            if _x.get('date'):
+                _asof = _x['date']
+                break
+    except Exception:
+        pass
+    _asof_html = (
+        f'｜資料截至 <b style="color:#FFD54F;">{_asof}</b>' if _asof else ''
+    )
+
+    return f"""
+    <h2>🏛️ 法人籌碼動態（外資／投信／自營商分列）</h2>
+    <p class="section-note">
+        各法人類別近 20 日買賣超排名，左欄買超、右欄賣超{_asof_html}。Data: <a href="https://github.com/appr1ciat1/tw-institutional-stocker" style="color:#4FC3F7;">appr1ciat1/tw-institutional-stocker</a>
+    </p>
+    {''.join(blocks)}
+"""
 
 
 

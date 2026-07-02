@@ -55,11 +55,26 @@ def fetch_inst_timeseries(ticker):
     return _fetch_json(f"{BASE_URL}/timeseries/{ticker}.json")
 
 
-def fetch_inst_rankings(window=20, direction="up"):
-    """三大法人持股變化排名表。window ∈ {5,20,60,120}, direction ∈ {up,down}。"""
+RANKING_CATEGORIES = ("foreign", "trust", "dealer", "three_inst")
+
+
+def fetch_inst_rankings(window=20, direction="up", category="three_inst"):
+    """法人持股/買賣超變化排名表。
+
+    window ∈ {5,20,60,120}, direction ∈ {up,down},
+    category ∈ {foreign(外資, 官方持股比率變化), trust(投信), dealer(自營商),
+    three_inst(舊版合併指標, 預設值向下相容)}。
+
+    2026-07 起資料源已把外資/投信/自營商分開輸出：
+    - foreign 的 record 帶 `ratio`（官方外資持股%）
+    - trust/dealer 的 record 帶 `net_shares`（N 日累計買賣超股數）
+    - three_inst 保留舊 schema（`three_inst_ratio`）
+    """
     if window not in WINDOWS:
         print(f"   ⚠️ window={window} 非新版支援值 {WINDOWS}，仍嘗試抓取")
-    return _fetch_json(f"{BASE_URL}/top_three_inst_change_{window}_{direction}.json")
+    if category not in RANKING_CATEGORIES:
+        print(f"   ⚠️ category={category} 非支援值 {RANKING_CATEGORIES}，仍嘗試抓取")
+    return _fetch_json(f"{BASE_URL}/top_{category}_change_{window}_{direction}.json")
 
 
 def fetch_stock_three_inst_latest():
@@ -216,3 +231,8 @@ def fetch_broker_trades_latest():
 def fetch_target_broker_trades():
     """重點/目標券商交易明細。"""
     return _fetch_json(f"{BASE_URL}/target_broker_trades.json")
+
+
+def fetch_main_force_latest():
+    """個股主力買賣超彙總（前 15 大買/賣超分點合計，張）。"""
+    return _fetch_json(f"{BASE_URL}/main_force_latest.json")
