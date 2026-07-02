@@ -106,6 +106,9 @@ class EventDrivenBacktester:
                  consec_loss_limit=3, consec_loss_pause=5,
                  sector_max_pct=0.75,
                  corr_filter=0,
+                 corr_select_max=0.0,
+                 corr_select_window=60,
+                 corr_select_cap=1,
                  max_portfolio_heat=1.0,
                  rank_weighted=False,
                  regime_deleverage=False,
@@ -194,6 +197,12 @@ class EventDrivenBacktester:
         self.consec_loss_pause = consec_loss_pause
         self.sector_max_pct = sector_max_pct
         self.corr_filter = corr_filter
+        # corr_select（建議A）：greedy 相關性選股。>0 啟用：依評分序選股，候選與
+        # (現有持倉 ∪ 今日已選) 中相關係數 > corr_select_max 的檔數達 corr_select_cap 即跳過。
+        # 用 corr_select_window 日(預設60)日報酬相關，資料只取到 i-1（無前視）。
+        self.corr_select_max = corr_select_max
+        self.corr_select_window = corr_select_window
+        self.corr_select_cap = corr_select_cap
         self.max_portfolio_heat = max_portfolio_heat
         self.rank_weighted = rank_weighted
         self.regime_deleverage = regime_deleverage
@@ -388,6 +397,44 @@ class EventDrivenBacktester:
             'tp_return': upside,
             'required_tp': required_tp,
         }
+
+    def _corr_select(self, candidates, active_trades, close_df, i, k_slots):
+        """建議A：greedy 相關性選股（corr_select_max/window/cap）。
+
+        依評分序走訪候選；候選與「現有持倉 ∪ 今日已選」中 corr_select_window 日
+        報酬相關 > corr_select_max 的檔數達 corr_select_cap 即跳過（選下一名）。
+        被跳過者不回補——寧缺勿濫，讓部位真正分散（有效注數↑）。
+        相關窗只取到 i-1（進場信號同一資訊集，無前視）。資料不足時退回原排序。
+        """
+        if k_slots <= 0:
+            return []
+        try:
+            win = int(self.corr_select_window)
+            held = [t for t in active_trades.keys() if t in close_df.columns]
+            cand_tickers = [c[0] for c in candidates[:25] if c[0] in close_df.columns]
+            pool = list(dict.fromkeys(held + cand_tickers))
+            if len(pool) < 2:
+                return candidates[:k_slots]
+            ret_slice = close_df[pool].iloc[max(0, i - win):i].pct_change()
+            ret_slice = ret_slice.dropna(how='all')
+            if len(ret_slice) < 20:
+                return candidates[:k_slots]
+            corr = ret_slice.corr(min_periods=max(20, int(win * 0.5)))
+            picked = []
+            compare_set = list(held)          # 對照集 = 持倉 ∪ 今日已選
+            for ticker, score, ep in candidates:
+                if len(picked) >= k_slots:
+                    break
+                peers = [t for t in compare_set if t != ticker and t in corr.columns]
+                if peers and ticker in corr.index:
+                    high_n = int((corr.loc[ticker, peers] > self.corr_select_max).sum())
+                    if high_n >= self.corr_select_cap:
+                        continue                # 與組合高相關 → 跳過選下一名
+                picked.append((ticker, score, ep))
+                compare_set.append(ticker)
+            return picked
+        except Exception:
+            return candidates[:k_slots]
 
     def run(self, total_score, close_df, open_df, high_df, low_df, ma_60,
             top_k=3, threshold=2.0, atr_df=None,
@@ -1279,6 +1326,11 @@ class EventDrivenBacktester:
                             selected = candidates[:min(effective_top_k, slots_available)]
                     except Exception:
                         selected = candidates[:min(effective_top_k, slots_available)]
+                elif self.corr_select_max > 0:
+                    # 建議A：greedy 相關性選股（與持倉∪已選 60日相關>閾值即跳過）
+                    selected = self._corr_select(
+                        candidates, active_trades, close_df, i,
+                        min(effective_top_k, slots_available))
                 else:
                     selected = candidates[:min(effective_top_k, slots_available)]
 

@@ -67,6 +67,9 @@ class MomentumV85(EngineStrategy, SignalProducer):
             hybrid_tiered=False,
             buy_cost=exec_cfg.buy_cost, sell_cost=exec_cfg.sell_cost,
             slippage=exec_cfg.slippage,
+            corr_select_max=p.get("corr_select_max", 0.0),
+            corr_select_window=p.get("corr_select_window", 60),
+            corr_select_cap=p.get("corr_select_cap", 1),
         )
         return bt.run(
             bundle.total_score, data.close, data.open, data.high, data.low,

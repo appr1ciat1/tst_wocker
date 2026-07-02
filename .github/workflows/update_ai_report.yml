@@ -113,6 +113,7 @@ jobs:
           python ai_report.py \
             --no-hybrid-tiered --consec-loss-limit 3 \
             --sl-atr 3.5 --regime-floor 0.0 --dynamic-topk \
+            --corr-select-max 0.7 --corr-select-window 60 --corr-select-cap 2 \
             --start-date 2019-01-01 --eval-start 2019-01-01
           sed -e 's#backtest_chart.png#chart_guard.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · GUARD 去風險#g' \

@@ -3,6 +3,8 @@ strategies.optimized_v85 — v8.5 約束優化後的兩個正式策略（與 v8.
 
 mom_guard (GUARD)：v8.5 + 弱勢去風險。graduated regime(floor=0：最弱全出) + breadth + dynamic_topk
                    + 放寬停損 sl3.5；不加碼。最穩健、交易最多。
+                   2026-07 起加入 corr_select 相關性分散選股（同 60 日相關>0.7 聚落最多 2 檔），
+                   全期 ann/Sharpe/MDD/2022 全面改善（見 GUARD_PARAMS 註解）。
 mom_surge (SURGE)：GUARD 的去風險不變 + 分段強勢加碼。只在 0050>MA60/MA20 且 breadth 高、VIX 低時
                    把單筆放大——四段式：弱勢 0% / 強 12.5% / 更強(breadth≥.65,VIX≤20) 14.5% /
                    最強(breadth≥.75,VIX≤15) 17%。追更高報酬，風險與 GUARD 相當甚至更低。
@@ -37,6 +39,11 @@ from strategy.event_backtest import EventDrivenBacktester
 GUARD_PARAMS = dict(
     sl_atr=3.5, regime_graduated=True, breadth_regime=True, regime_floor=0.0,
     dynamic_topk=True, dynamic_gap_filter=False, position_size=0.10,
+    # 建議A（效率前緣/共變異數觀點）：greedy 相關性選股——候選與(持倉∪已選)60日相關
+    # >0.7 的檔數達 2 即跳過（同聚落最多 2 檔）。2026-07 驗證：ann 43.2→51.6%、
+    # Sharpe 1.54→1.78、MDD -34.2→-26.8%、2022 -14.9→-10.3%，鄰域(0.65-0.75/40-80)全穩健。
+    # 注：cap1(嚴禁同群)與 SURGE/SURGE PRO(加碼靠集中聚落)測試皆變差，故只 GUARD 採用。
+    corr_select_max=0.70, corr_select_window=60, corr_select_cap=2,
 )
 SURGE_PARAMS = dict(
     sl_atr=3.5, hold_days=22, regime_graduated=True, breadth_regime=True, regime_floor=0.0,
@@ -74,6 +81,9 @@ def _build_engine(p: dict, exec_cfg: ExecConfig) -> EventDrivenBacktester:
         strong_vix_max=p.get('strong_vix_max', 20.0),
         max_regime_scale=p.get('max_regime_scale', 1.50),
         strong_tiers=p.get('strong_tiers'),
+        corr_select_max=p.get('corr_select_max', 0.0),
+        corr_select_window=p.get('corr_select_window', 60),
+        corr_select_cap=p.get('corr_select_cap', 1),
     )
 
 
@@ -90,7 +100,7 @@ def _run(p: dict, data: MarketData, exec_cfg: ExecConfig) -> Tuple[pd.DataFrame,
 
 @register("mom_guard")
 class MomGuard(EngineStrategy):
-    description = "GUARD｜v8.5+弱勢去風險(graduated floor0+breadth+dynamic_topk+sl3.5)，不加碼，最穩健"
+    description = "GUARD｜v8.5+弱勢去風險+相關性分散選股(60日corr>0.7聚落最多2檔)，不加碼，最穩健"
 
     def run_engine(self, data: MarketData, exec_cfg: ExecConfig):
         return _run({**GUARD_PARAMS, **self.params}, data, exec_cfg)

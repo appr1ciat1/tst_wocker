@@ -1933,6 +1933,19 @@ def parse_args():
              '條件越強(breadth 越高、VIX 越低)倍數越大；空=單段(strong_regime_mult)'
     )
     parser.add_argument(
+        '--corr-select-max', type=float, default=0.0,
+        help='相關性選股閾值 (0=停用)。greedy 依評分選股，候選與(持倉∪已選)的'
+             '日報酬相關 > 此值的檔數達 --corr-select-cap 即跳過。GUARD 用 0.7'
+    )
+    parser.add_argument(
+        '--corr-select-window', type=int, default=60,
+        help='相關性選股的相關係數視窗天數 (預設 60)'
+    )
+    parser.add_argument(
+        '--corr-select-cap', type=int, default=2,
+        help='同高相關聚落允許檔數 (預設 2=同群最多2檔；1=嚴格禁同群)'
+    )
+    parser.add_argument(
         '--inst-hold-exit', action='store_true',
         help='TP/時間到期且獲利時，用三大法人 5/10/20 日籌碼決定續抱、分批停利或全出'
     )
@@ -2153,6 +2166,9 @@ def main():
             strong_tiers=([tuple(float(x) for x in seg.split(','))
                            for seg in args.strong_tiers.split(';')]
                           if args.strong_tiers else None),
+            corr_select_max=args.corr_select_max,
+            corr_select_window=args.corr_select_window,
+            corr_select_cap=args.corr_select_cap,
             inst_hold_exit=args.inst_hold_exit,
             inst_partial_frac=args.inst_partial_frac,
             inst_max_extend_days=args.inst_max_extend_days,
