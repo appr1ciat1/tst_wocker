@@ -61,9 +61,9 @@ from strategy.institutional_flow import (
     build_inst_flow_df,
     build_inst_flow_windows,
     get_inst_flow_for_signals,
-    fetch_inst_rankings,
 )
 from strategy.news_sentiment import get_news_sentiment_for_signals
+from inst_widget import build_inst_widget
 
 # 嘗試載入 exchange_calendars
 try:
@@ -151,113 +151,15 @@ def get_next_n_trading_days(from_date, n_days):
     return approx_date.strftime('%Y-%m-%d')
 
 
-def _build_inst_category_block(category, title, color, value_header, value_fn):
-    """單一法人類別（外資/投信/自營商）的買超/賣超 Top-10 雙欄 HTML。"""
-    try:
-        up_list = fetch_inst_rankings(20, 'up', category=category) or []
-        down_list = fetch_inst_rankings(20, 'down', category=category) or []
-    except Exception:
-        up_list, down_list = [], []
-    if not up_list and not down_list:
-        return f'<h3 style="color:{color};">{title}</h3><p class="section-note">⚠️ 無數據</p>'
-
-    # 過濾 ETF（code 5 碼以上通常為 ETF）+ 防呆：20 日變化 >40pp 不可能，
-    # 多為資料異常（資料源已過濾，此為雙重保險）。外資另檢查官方持股比率合理。
-    def _sane(x):
-        c = x.get('change', 0.0) or 0.0
-        if len(x.get('code', '')) != 4 or abs(c) > 40.0:
-            return False
-        if category == 'foreign':
-            r = x.get('ratio', 0.0) or 0.0
-            return 0.0 <= r <= 100.0
-        return True
-
-    up_stocks = [x for x in up_list if _sane(x)][:10]
-    down_stocks = [x for x in down_list if _sane(x)][:10]
-
-    def _rows(stocks, positive):
-        rows = ""
-        sign_color = '#00ff00' if positive else '#ff4444'
-        for i, item in enumerate(stocks, 1):
-            change = item.get('change', 0.0)
-            bar_width = min(abs(change) * 8, 100)
-            sign = '+' if change >= 0 else '-'
-            rows += (
-                f'<tr>'
-                f'<td style="text-align:center;color:#888;">{i}</td>'
-                f'<td><b>{item.get("code", "")}</b> {item.get("name", "")}</td>'
-                f'<td style="text-align:right;color:{sign_color};font-weight:bold;">{sign}{abs(change):.1f}pp</td>'
-                f'<td style="text-align:right;">{value_fn(item)}</td>'
-                f'<td><div style="background:linear-gradient(90deg,{sign_color}44 {bar_width}%,transparent {bar_width}%);'
-                f'height:18px;border-radius:3px;"></div></td>'
-                f'</tr>\n'
-            )
-        return rows
-
-    header = (
-        f'<thead><tr>'
-        f'<th style="width:30px;">#</th><th>股票</th>'
-        f'<th style="text-align:right;">20日變化</th>'
-        f'<th style="text-align:right;">{value_header}</th>'
-        f'<th style="width:80px;">幅度</th>'
-        f'</tr></thead>'
-    )
-    return f"""
-    <h3 style="color:{color};margin:14px 0 8px;">{title}</h3>
-    <div class="split-grid">
-        <div>
-            <table style="width:100%;">{header}<tbody>{_rows(up_stocks, True)}</tbody></table>
-        </div>
-        <div>
-            <table style="width:100%;">{header}<tbody>{_rows(down_stocks, False)}</tbody></table>
-        </div>
-    </div>
-"""
-
-
 def _build_inst_section():
+    """建立法人籌碼互動 section。
+
+    改用共用互動 widget（inst_widget.build_inst_widget）：類別
+    外資／投信／自營商／主力／三大法人合計，時間段 3/5/10/20 日、買賣超雙向、
+    前 30 名、可排除 ETF；瀏覽器端即時抓資料源，與資料源網頁完全同口徑。
+    取代舊的靜態 20 日 Top-10 三欄快照。
     """
-    建立法人籌碼動態 HTML section。
-
-    外資／投信／自營商「分開」呈現各自的 20 日買超/賣超 Top-10
-    （資料源 2026-07 起提供分類排名檔；不再顯示三者合併的單一指標）。
-    """
-    def _fmt_ratio(item):
-        return f"{item.get('ratio', 0.0) or 0.0:.1f}%"
-
-    def _fmt_net_shares(item):
-        lots = (item.get('net_shares', 0) or 0) / 1000.0
-        return f"{lots:+,.0f} 張"
-
-    blocks = [
-        _build_inst_category_block(
-            'foreign', '🌍 外資（官方持股比率變化）', '#4FC3F7', '持股', _fmt_ratio),
-        _build_inst_category_block(
-            'trust', '🏦 投信（20日累計買賣超）', '#FFD54F', '買賣超', _fmt_net_shares),
-        _build_inst_category_block(
-            'dealer', '💼 自營商（20日累計買賣超）', '#CE93D8', '買賣超', _fmt_net_shares),
-    ]
-
-    # 資料 as-of 日期：從任一分類排名檔的 record 取（與報表價格日解耦、可稽核）
-    _asof = ''
-    try:
-        for _x in (fetch_inst_rankings(20, 'up', category='foreign') or []):
-            if _x.get('date'):
-                _asof = _x['date']
-                break
-    except Exception:
-        pass
-    _asof_html = (
-        f'｜資料截至 <b style="color:#FFD54F;">{_asof}</b>' if _asof else ''
-    )
-
-    return f"""
-    <h2>🏛️ 法人籌碼動態（外資／投信／自營商分列）</h2>
-    <p class="section-note">
-        各法人類別近 20 日買賣超排名，左欄買超、右欄賣超{_asof_html}。Data: <a href="https://github.com/appr1ciat1/tw-institutional-stocker" style="color:#4FC3F7;">appr1ciat1/tw-institutional-stocker</a>
-    </p>
-    {''.join(blocks)}
-"""
+    return build_inst_widget()
 
 
 

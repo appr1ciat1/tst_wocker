@@ -18,6 +18,7 @@ from datetime import date
 
 import pandas as pd
 
+from inst_widget import build_inst_widget
 from strategies.registry import get_strategy
 from strategies.base import ExecConfig
 from twstk.backtest.engine import RunConfig, build_market_data
@@ -468,6 +469,8 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
         "<b>要榨乾回測優勢且能扛崩盤 → SURGE PRO；務實怕崩盤 → SURGE。</b></p>"
     )
 
+    inst_widget_html = build_inst_widget()
+
     return f"""<!DOCTYPE html>
 <html lang="zh-TW"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -513,6 +516,8 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
 
  <h2>📋 今日買賣訊號（SURGE PRO，最強策略）</h2>
  <div class="card">{sig_html}</div>
+
+ {inst_widget_html}
 
  <h2>🔁 近 30 日歷史買進訊號（3 輪 × 10 交易日，每輪 ≥2 次）</h2>
  <div class="card">{rounds_html}</div>
