@@ -35,7 +35,7 @@ DEFAULT_BASE_URL = (
 BASE_URL = os.environ.get("TW_INST_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
 
 TIMEOUT = 15
-WINDOWS = (5, 10, 20, 60, 120)  # 10 日可由 timeseries 的持股比率補算
+WINDOWS = (3, 5, 10, 20, 60, 120)  # 排名檔 2026-07 起提供 3/5/10/20（券商慣例）
 
 
 def _fetch_json(url):
@@ -56,25 +56,29 @@ def fetch_inst_timeseries(ticker):
     return _fetch_json(f"{BASE_URL}/timeseries/{ticker}.json")
 
 
-RANKING_CATEGORIES = ("foreign", "trust", "dealer", "three_inst")
+RANKING_CATEGORIES = ("foreign", "trust", "dealer", "three_inst", "three_inst_net")
 
 
 def fetch_inst_rankings(window=20, direction="up", category="three_inst"):
-    """法人持股/買賣超變化排名表。
+    """法人買賣超排名表（口徑與券商 App 一致，可直接對帳）。
 
-    window ∈ {5,20,60,120}, direction ∈ {up,down},
-    category ∈ {foreign(外資, 官方持股比率變化), trust(投信), dealer(自營商),
-    three_inst(舊版合併指標, 預設值向下相容)}。
+    window ∈ {3,5,10,20}（分類榜；three_inst 舊指標另有 60/120），
+    direction ∈ {up,down}，
+    category ∈ {foreign(外資), trust(投信), dealer(自營商),
+    three_inst_net(三大法人合計買賣超), three_inst(舊版合成估計, 向下相容)}。
 
-    2026-07 起資料源已把外資/投信/自營商分開輸出：
-    - foreign 的 record 帶 `ratio`（官方外資持股%）
-    - trust/dealer 的 record 帶 `net_shares`（N 日累計買賣超股數）
-    - three_inst 保留舊 schema（`three_inst_ratio`）
+    2026-07 起排名一律依「N 日累計買賣超股數」排序：
+    - foreign/trust/dealer/three_inst_net 的 record 帶 `net_shares`/`net_lots`/`pct_cap`
+    - foreign 另帶 `ratio`（官方外資持股%）與 `change`（持股比率 N 日變化 pp）
+    - three_inst_net 另帶 foreign_lots/trust_lots/dealer_lots 三類分解
+    - three_inst 保留舊 schema（`three_inst_ratio`，估計值僅供參考）
     """
     if window not in WINDOWS:
         print(f"   ⚠️ window={window} 非新版支援值 {WINDOWS}，仍嘗試抓取")
     if category not in RANKING_CATEGORIES:
         print(f"   ⚠️ category={category} 非支援值 {RANKING_CATEGORIES}，仍嘗試抓取")
+    if category == "three_inst_net":
+        return _fetch_json(f"{BASE_URL}/top_three_inst_net_{window}_{direction}.json")
     return _fetch_json(f"{BASE_URL}/top_{category}_change_{window}_{direction}.json")
 
 
