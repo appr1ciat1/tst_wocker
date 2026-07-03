@@ -1,5 +1,11 @@
 name: Deploy GitHub Pages
 
+# 2026-07 改版：改用「push 靜態檔到 gh-pages 分支 + Pages legacy 直出」。
+# 原因：actions/deploy-pages@v4 的 artifact 部署佇列曾整站卡死（deployment_queued
+# 直到 timeout，持續 12+ 小時），且 rerun 會因重複 artifact 名稱必失敗。
+# gh-pages 為單一扁平 commit（每次 force push 覆蓋），不膨脹歷史。
+# Pages 設定：Source = Deploy from a branch / gh-pages / root。
+
 on:
   push:
     branches: [main]
@@ -21,9 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write   # push gh-pages 分支
 
 jobs:
   deploy:
@@ -31,9 +35,6 @@ jobs:
       github.event_name != 'workflow_run' ||
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -74,9 +75,15 @@ jobs:
           echo "Site files:"
           ls -lh _site/
 
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Push to gh-pages（單一扁平 commit，force 覆蓋）
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd _site
+          git init -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "pages: site snapshot $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" gh-pages
+          echo "✅ 已推 gh-pages；GitHub Pages 會自動以 legacy build 重建（Source=gh-pages）"
