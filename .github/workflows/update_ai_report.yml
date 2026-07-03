@@ -2,11 +2,13 @@ name: AI Quant Trading Report v9
 
 on:
   schedule:
-    # 每週一到六 UTC 09:17（台灣時間 17:17 收盤後）。含週六以涵蓋台股「補班補課」交易日；
+    # 每週一到六 UTC 10:40（台灣時間 18:40）。含週六以涵蓋台股「補班補課」交易日；
     # 實際是否為交易日由下方 "Check Taiwan trading day" 步驟用 XTAI 行事曆判定，非交易日自動跳過。
-    - cron: '17 9 * * 1-6'
-    # 每月 1 日 UTC 10:00 跑月報
-    - cron: '0 10 1 * *'
+    # 2026-07-03 由 17:17 改為 18:40：法人資料源 (tw-institutional-stocker) 每日 18:00 台北
+    # 更新當日 T86/QFII，報表排在其後才能吃到「當天」籌碼；17:17 舊時序會晚一天。
+    - cron: '40 10 * * 1-6'
+    # 每月 1 日 UTC 11:30 跑月報（同理挪到法人資料更新後）
+    - cron: '30 11 1 * *'
   workflow_dispatch:
     inputs:
       tp_atr:
