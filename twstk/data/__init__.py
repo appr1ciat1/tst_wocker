@@ -46,6 +46,7 @@ _EXPORTS = {
     "fetch_broker_trends": "twstk.data.institutional",
     "fetch_broker_trades_latest": "twstk.data.institutional",
     "fetch_target_broker_trades": "twstk.data.institutional",
+    "fetch_main_force_latest": "twstk.data.institutional",
     "INST_BASE_URL": "twstk.data.institutional",
 }
 

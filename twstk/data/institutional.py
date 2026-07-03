@@ -24,10 +24,11 @@ import numpy as np
 import pandas as pd
 
 # ── 新版資料來源（可用環境變數覆寫）──────────────────────────────
-# 註：appr1ciat1 的 GitHub Pages 尚未啟用，故預設改用 raw.githubusercontent.com
-#     （已實測可用）。若日後啟用 Pages，改成
-#     https://appr1ciat1.github.io/tw-institutional-stocker/data 即可，
-#     或直接設環境變數 TW_INST_BASE_URL 覆寫。
+# 註：預設走 raw.githubusercontent.com（穩定、實測可用）。
+#     2026-07-03 起 GitHub Pages 也已啟用（前端網頁 + 同一份 data）：
+#     https://appr1ciat1.github.io/tw-institutional-stocker/
+#     若要改走 Pages 的 data，設 TW_INST_BASE_URL=
+#     https://appr1ciat1.github.io/tw-institutional-stocker/data 即可。
 DEFAULT_BASE_URL = (
     "https://raw.githubusercontent.com/appr1ciat1/tw-institutional-stocker/main/docs/data"
 )
