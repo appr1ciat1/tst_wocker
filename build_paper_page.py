@@ -171,8 +171,9 @@ def ninety_day_curves(eq_map, n_days=90):
 def recent_buy_signal_rounds(data, top_k=7, threshold=2.0, n_rounds=3, round_len=10):
     """近 n_rounds×round_len 個台股交易日的「歷史買進訊號」，每輪列出買進訊號 ≥2 次的標的。
 
-    買進訊號＝四策略共用的 v8.5 動量評分（momentum_v85.prepare）每日選股：
-    score≥threshold 且 close>ma_long 且在流動性池內，取當日 Top-K。
+    買進訊號＝策略每日「想買進的 Top-K 標的」：score≥threshold 且 close>ma_long 且在
+    流動性池內、且當日大盤 regime 為多頭（0050>60MA，策略在弱勢 regime 不進場）才計。
+    計的是「被選為買進候選的天數」（含當時已持有續抱者），反映持續看好度。
     每 round_len 個交易日為一輪，回傳 n_rounds 輪（最新一輪在前）。
     """
     bundle = get_strategy("momentum_v85").prepare(data)
@@ -183,8 +184,19 @@ def recent_buy_signal_rounds(data, top_k=7, threshold=2.0, n_rounds=3, round_len
     if data.universe_mask is not None:
         eligible = eligible & data.universe_mask.reindex_like(score).fillna(False)
     masked = score.where(eligible)
-    ranks = masked.rank(axis=1, ascending=False)
+    # method='first'：同分時依欄位序打破平手，確保「恰好」取 Top-K（避免 average 讓第 K+1 檔也 <=K）
+    ranks = masked.rank(axis=1, method="first", ascending=False)
     selected = (ranks <= top_k) & masked.notna()
+
+    # regime 閘：大盤 0050 <= 60MA 的弱勢日，策略不進場 → 該日不計任何買進訊號
+    try:
+        if data.market_close is not None:
+            mc = data.market_close.reindex(selected.index).ffill()
+            ma60 = mc.rolling(60, min_periods=20).mean()
+            regime_on = (mc > ma60).fillna(True)   # 早期資料不足 → 預設多頭
+            selected = selected.mul(regime_on.astype(int), axis=0).astype(bool)
+    except Exception:
+        pass
 
     dates = list(selected.index)
     if len(dates) < round_len:
@@ -415,9 +427,12 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
                 f"第 {rd['idx']} 輪{tag} · {rd['start']} → {rd['end']}</h3>{stbl}"
             )
         rounds_html = (
-            "<p style='color:#94a3b8'>買進訊號＝四策略共用的 v8.5 動量評分每日 Top-7 選股"
-            "（score≥2.0 且站上 60MA 且在流動性池內）。每 10 個台股交易日為一輪，列出該輪內"
-            "出現買進訊號 <b>≥2 次</b>的標的，依次數由多到少；最新一輪在最前。</p>"
+            "<p style='color:#94a3b8'>買進訊號＝策略每日「想買進的 Top-7 標的」"
+            "（v8.5 動量評分 ≥2.0、站上 60MA、在流動性池內，且當日大盤 <b>regime 為多頭"
+            "（0050&gt;60MA）</b>才計）。計的是「被選為買進候選的天數」，"
+            "<b>含當時已持有續抱者</b>，反映持續看好度——與上方『今日新買進計畫』（已排除持倉、"
+            "故當日新入選者僅 1 天）語意不同。每 10 個台股交易日為一輪，"
+            "列出該輪內 <b>≥2 次</b>的標的，依次數由多到少；最新一輪在最前。</p>"
             f"{round_blocks}"
         )
     else:
