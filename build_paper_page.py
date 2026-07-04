@@ -427,12 +427,18 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
                 f"第 {rd['idx']} 輪{tag} · {rd['start']} → {rd['end']}</h3>{stbl}"
             )
         rounds_html = (
-            "<p style='color:#94a3b8'>買進訊號＝策略每日「想買進的 Top-7 標的」"
-            "（v8.5 動量評分 ≥2.0、站上 60MA、在流動性池內，且當日大盤 <b>regime 為多頭"
-            "（0050&gt;60MA）</b>才計）。計的是「被選為買進候選的天數」，"
-            "<b>含當時已持有續抱者</b>，反映持續看好度——與上方『今日新買進計畫』（已排除持倉、"
-            "故當日新入選者僅 1 天）語意不同。每 10 個台股交易日為一輪，"
-            "列出該輪內 <b>≥2 次</b>的標的，依次數由多到少；最新一輪在最前。</p>"
+            "<table class='note'><tbody>"
+            "<tr><td class='nk'>買進訊號</td><td>策略每日「想買進的 Top-7 標的」——"
+            "v8.5 動量評分 ≥2.0、站上 60MA、在流動性池內。</td></tr>"
+            "<tr><td class='nk'>Regime 閘</td><td>僅當日大盤多頭（<b>0050 &gt; 60MA</b>）才計；"
+            "弱勢日策略不進場，不列訊號。</td></tr>"
+            "<tr><td class='nk'>計數方式</td><td>該股被選為當日買進候選的<b>天數</b>"
+            "（<b>含當時已持有續抱者</b>）→ 反映「持續看好度」。</td></tr>"
+            "<tr><td class='nk'>分輪 / 排序</td><td>每 <b>10 個台股交易日</b>為一輪、共 3 輪，最新一輪在前；"
+            "每輪只列 <b>≥2 次</b>的標的，依次數由多到少。</td></tr>"
+            "<tr><td class='nk'>⚠️ 與上方差異</td><td>「今日買賣訊號」是<b>新買進</b>（已排除持倉），"
+            "故當日新入選的股票在此僅 1 天、可能不在 ≥2 名單——兩者衡量不同，非矛盾。</td></tr>"
+            "</tbody></table>"
             f"{round_blocks}"
         )
     else:
@@ -506,6 +512,10 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
  .kpis{{display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:10px;margin:6px 0 14px}}
  .kpi{{background:#0f1b2e;border:1px solid #283449;border-radius:10px;padding:9px 11px}}
  .kl{{color:#94a3b8;font-size:.72rem}} .kv{{font-size:1.12rem;font-weight:700;margin-top:2px}}
+ table.note{{margin:0 0 12px;font-size:.85rem;background:#0f1b2e;border:1px solid #283449;border-radius:10px;overflow:hidden}}
+ table.note td{{text-align:left;color:#cbd5e1;padding:8px 12px;border-bottom:1px solid #1e293b;line-height:1.5}}
+ table.note tr:last-child td{{border-bottom:none}}
+ table.note td.nk{{color:#93c5fd;font-weight:700;white-space:nowrap;width:1%;vertical-align:top;background:#132033}}
 </style></head><body><div class="wrap">
  <h1>📈 Paper Trading · 四策略</h1>
  <p class="sub">v8.5 / GUARD / SURGE / SURGE PRO 全期權益曲線（log 軸，起點=100）+ 最強 SURGE PRO 的當日買賣訊號與近兩個月績效。每個台股交易日收盤後自動更新。資料：{today}。</p>

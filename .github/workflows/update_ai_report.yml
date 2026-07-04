@@ -2,13 +2,11 @@ name: AI Quant Trading Report v9
 
 on:
   schedule:
-    # 每週一到六 UTC 10:40（台灣時間 18:40）。含週六以涵蓋台股「補班補課」交易日；
+    # 每週一到六 UTC 09:17（台灣時間 17:17 收盤後）。含週六以涵蓋台股「補班補課」交易日；
     # 實際是否為交易日由下方 "Check Taiwan trading day" 步驟用 XTAI 行事曆判定，非交易日自動跳過。
-    # 2026-07-03 由 17:17 改為 18:40：法人資料源 (tw-institutional-stocker) 每日 18:00 台北
-    # 更新當日 T86/QFII，報表排在其後才能吃到「當天」籌碼；17:17 舊時序會晚一天。
-    - cron: '40 10 * * 1-6'
-    # 每月 1 日 UTC 11:30 跑月報（同理挪到法人資料更新後）
-    - cron: '30 11 1 * *'
+    - cron: '17 9 * * 1-6'
+    # 每月 1 日 UTC 10:00 跑月報
+    - cron: '0 10 1 * *'
   workflow_dispatch:
     inputs:
       tp_atr:
@@ -200,6 +198,9 @@ jobs:
   quarterly-health-check:
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
+    # ★可靠性關鍵：此季度健檢（4次/年）失敗絕不能拖累「整體 run conclusion」，
+    #   否則 deploy_pages 的 workflow_run.conclusion=='success' 不成立 → 每日部署被跳過。
+    continue-on-error: true
 
     steps:
       - name: Check if quarterly (first week of Jan/Apr/Jul/Oct)
@@ -250,17 +251,21 @@ jobs:
           git config --global user.email "voidful.stack@gmail.com"
           git config --global user.name "Voidful"
 
-          git add factor_search_results.csv ablation_results.csv backtest_chart.png || true
+          # 不含 backtest_chart.png：generate-report 已提交它；若此處也改動會與其 rebase 衝突
+          # （"could not apply"），過去正是這造成季度 run 失敗、連累 deploy 被跳過。
+          git add factor_search_results.csv ablation_results.csv || true
           git add -u artifacts || true
 
           if git diff --cached --quiet; then
-            echo "No changes"
-          else
-            git commit -m "🔄 Quarterly health check ($(date -u '+%Y-%m-%d'))"
+            echo "No changes"; exit 0
           fi
+          git commit -m "🔄 Quarterly health check ($(date -u '+%Y-%m-%d'))"
 
-          # Rebase onto latest remote without downloading the full repository history.
-          git fetch --no-tags --depth=50 origin main:refs/remotes/origin/main
-          git rebase --autostash origin/main
-
-          git push origin HEAD:main
+          # 與 generate-report 併發 push：重試處理 non-fast-forward（各自檔案不重疊故 rebase 應乾淨）
+          for i in 1 2 3 4 5; do
+            git fetch --no-tags --depth=50 origin main:refs/remotes/origin/main
+            git rebase --autostash origin/main || { git rebase --abort || true; git reset --soft HEAD; }
+            if git push origin HEAD:main; then echo "pushed on try $i"; exit 0; fi
+            echo "push retry $i (non-fast-forward)"; sleep 8
+          done
+          echo "quarterly push failed after retries — 不阻擋部署（continue-on-error）"; exit 1
