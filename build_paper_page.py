@@ -24,7 +24,6 @@ from strategies.base import ExecConfig
 from twstk.backtest.engine import RunConfig, build_market_data
 from twstk.backtest.metrics import compute_risk_metrics
 
-HTML_FILE = "paper_trading.html"
 CAPITAL = 1_000_000
 
 # (顯示名, 註冊名, 顏色, 一句說明)
@@ -35,6 +34,51 @@ STRATS = [
     ("GUARD",     "mom_guard",     "#10b981", "弱勢去風險，不加碼，最穩健"),
     ("v8.5",      "momentum_v85",  "#3b82f6", "純動量基準（優化前）"),
 ]
+
+# 每個追蹤策略各產一個 paper 頁。orders 檔：SURGE PRO 走 ai_report 預設 orders_<date>.json；
+# GUARD 由 workflow 在 GUARD 那步 cp 成 orders_guard_latest.json（否則會被 SURGE PRO 覆蓋）。
+TRACKS = [
+    {"disp": "SURGE PRO", "reg": "mom_surge_pro", "color": "#ef4444", "role": "追最高報酬",
+     "file": "paper_trading.html", "orders": "artifacts/orders_2*.json", "report": "report_surge_pro.html"},
+    {"disp": "GUARD", "reg": "mom_guard", "color": "#10b981", "role": "最穩健·相關性分散",
+     "file": "paper_trading_guard.html", "orders": "artifacts/orders_guard_*.json", "report": "report_guard.html"},
+]
+
+
+# ── 股票代碼 → 中文名 / 市場（給 Yahoo Finance 連結）─────────────
+_STOCK_META = None
+
+
+def _stock_meta():
+    """{bare_code: (中文名, 市場)}；來源＝法人快照 code/name/market（快取一次）。"""
+    global _STOCK_META
+    if _STOCK_META is None:
+        _STOCK_META = {}
+        try:
+            from twstk.data.institutional import fetch_stock_three_inst_latest
+            for x in (fetch_stock_three_inst_latest() or []):
+                _STOCK_META[str(x.get("code"))] = (x.get("name", ""), str(x.get("market", "")))
+        except Exception:
+            _STOCK_META = {}
+    return _STOCK_META
+
+
+def _stock_link(ticker):
+    """回傳 HTML <a>：『代碼 中文名』，點擊跳 Yahoo Finance（上市.TW / 上櫃.TWO）。"""
+    if ticker is None or str(ticker).strip() in ("", "None", "-"):
+        return "-"
+    raw = str(ticker)
+    code = raw.split(".")[0]
+    name, market = _stock_meta().get(code, ("", ""))
+    if raw.endswith(".TWO"):
+        suf = ".TWO"
+    elif raw.endswith(".TW"):
+        suf = ".TW"
+    else:
+        suf = ".TWO" if market.upper() in ("TPEX", "OTC", "TWO", "櫃買", "上櫃") else ".TW"
+    url = f"https://finance.yahoo.com/quote/{code}{suf}"
+    label = f"{code}{('&nbsp;' + name) if name else ''}"
+    return f"<a href='{url}' target='_blank' rel='noopener'>{label}</a>"
 
 
 def _downsample(dates, values, step):
@@ -51,9 +95,8 @@ def run_all():
     exec_cfg = ExecConfig(initial_capital=CAPITAL, top_k=7, threshold=2.0)
 
     out = []
-    spro_eq = None
-    spro_trades = None
     eq_map = {}
+    trades_map = {}
     for disp, reg, color, desc in STRATS:
         print(f"▶ 回測 {disp} ({reg}) ...")
         strat = get_strategy(reg)
@@ -62,8 +105,7 @@ def run_all():
         eq = (equity["Equity"] if "Equity" in equity.columns else equity.iloc[:, 0]).sort_index()
         eq = eq.dropna()
         eq_map[disp] = eq
-        if reg == "mom_surge_pro":
-            spro_eq, spro_trades = eq, trades
+        trades_map[disp] = trades
         norm = (eq / eq.iloc[0] * 100.0)
         dates = [d.strftime("%Y-%m-%d") for d in norm.index]
         vals = [round(float(v), 2) for v in norm.values]
@@ -79,7 +121,7 @@ def run_all():
         })
         print(f"   {disp}: ann={m.get('ann_return',0)*100:.1f}% MDD={m.get('max_drawdown_pct',0)*100:.1f}% "
               f"Sharpe={m.get('sharpe',0):.2f} 交易={m.get('total_trades',0)}")
-    return out, spro_eq, spro_trades, data, eq_map
+    return out, data, eq_map, trades_map
 
 
 # 近 90 天權益曲線比較用的 ETF（台股 ETF；上市走 .TW，上櫃走 .TWO，下方自動後援）
@@ -304,9 +346,10 @@ def recent_sells(spro_trades, n_days=7):
     } for _, r in td.iterrows()]
 
 
-def today_signals():
-    """讀最新 artifacts/orders_*.json（= SURGE PRO，最後跑）→ 今日買入訊號。"""
-    files = sorted(glob.glob("artifacts/orders_*.json"))
+def today_signals(orders_glob="artifacts/orders_2*.json"):
+    """讀最新符合 orders_glob 的 orders 檔 → 今日買入訊號。
+    SURGE PRO 走 orders_2*.json（ai_report 預設，日期命名）；GUARD 走 orders_guard_*.json。"""
+    files = sorted(glob.glob(orders_glob), key=lambda f: os.path.getmtime(f))
     if not files:
         return None, []
     latest = files[-1]
@@ -327,8 +370,11 @@ def today_signals():
     return latest, sigs
 
 
-def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_rounds=None, ninety=None):
+def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_rounds=None, ninety=None, track=None):
     today = date.today().strftime("%Y-%m-%d")
+    track = track or TRACKS[0]
+    t_disp, t_color = track["disp"], track["color"]
+    t_role, t_report = track.get("role", ""), track.get("report", "report_surge_pro.html")
     # 摘要表
     rows = ""
     for r in results:
@@ -349,10 +395,10 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
             % (json.dumps(r["disp"]), json.dumps(r["vals"]), r["color"])
         )
     datasets_js = "[" + ",".join(datasets) + "]"
-    # 買進訊號
+    # 買進訊號（股票欄＝代碼+中文名，點擊跳 Yahoo Finance）
     if signals:
         buy_rows = "".join(
-            f"<tr><td>{s['ticker']}</td><td>{s['entry']}</td><td>{s['tp']}</td>"
+            f"<tr><td>{_stock_link(s['ticker'])}</td><td>{s['entry']}</td><td>{s['tp']}</td>"
             f"<td>{s['sl']}</td><td>{s['exec'] or '-'}</td></tr>" for s in signals[:20]
         )
         buy_html = ("<table><tr><th>股票</th><th>參考進場</th><th>停利</th><th>停損</th><th>執行日</th></tr>"
@@ -362,7 +408,7 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
     # 賣出訊號（近 7 日出場）
     if sells:
         sell_rows = "".join(
-            f"<tr><td>{s['ticker']}</td><td>{s['exit_d']}</td><td>{s['exit_p']}</td>"
+            f"<tr><td>{_stock_link(s['ticker'])}</td><td>{s['exit_d']}</td><td>{s['exit_p']}</td>"
             f"<td style='color:{'#4ade80' if s['ret']>0 else '#f87171'}'>{s['ret']*100:+.1f}%</td>"
             f"<td>{s['reason']}</td></tr>" for s in sells[:20]
         )
@@ -371,8 +417,9 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
     else:
         sell_html = "<p style='color:#94a3b8'>近 7 日無出場。</p>"
     sig_html = (
-        f"<p style='color:#94a3b8'>買進來源：{os.path.basename(sig_file or '')}（SURGE PRO 次一交易日進場計畫）。賣出＝近 7 日 TP/SL/時間到期出場。</p>"
-        f"<h3 style='font-size:.98rem;margin:6px 0 4px;color:#fda4af'>🟢 買進訊號</h3>{buy_html}"
+        f"<p style='color:#94a3b8'>買進來源：{os.path.basename(sig_file or '（無）')}（{t_disp} 次一交易日進場計畫）。"
+        "賣出＝近 7 日 TP/SL/時間到期出場。股票可點擊跳 Yahoo Finance。</p>"
+        f"<h3 style='font-size:.98rem;margin:6px 0 4px;color:{t_color}'>🟢 買進訊號</h3>{buy_html}"
         f"<h3 style='font-size:.98rem;margin:14px 0 4px;color:#93c5fd'>🔴 賣出訊號</h3>{sell_html}"
     )
     # SURGE PRO 過去兩個月
@@ -391,7 +438,7 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
         )
         if tm_trades:
             tr_rows = "".join(
-                f"<tr><td>{t['ticker']}</td><td>{t['entry_d']}</td><td>{t['exit_d']}</td>"
+                f"<tr><td>{_stock_link(t['ticker'])}</td><td>{t['entry_d']}</td><td>{t['exit_d']}</td>"
                 f"<td>{t['entry_p']}</td><td>{t['exit_p']}</td>"
                 f"<td style='color:{'#4ade80' if t['ret']>0 else '#f87171'}'>{t['ret']*100:+.1f}%</td>"
                 f"<td>{t['reason']}</td><td>{t['days']}</td></tr>" for t in tm_trades[:60]
@@ -414,8 +461,8 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
             tag = "（最新）" if rd["idx"] == 1 else ""
             if rd["stocks"]:
                 srows = "".join(
-                    f"<tr><td>{code}{(' ' + nm) if nm else ''}</td>"
-                    f"<td><b style='color:#fda4af'>{cnt}</b> / {rd['n_days']} 日</td></tr>"
+                    f"<tr><td>{_stock_link(code)}</td>"
+                    f"<td><b style='color:{t_color}'>{cnt}</b> / {rd['n_days']} 日</td></tr>"
                     for code, nm, cnt in rd["stocks"]
                 )
                 stbl = ("<table><tr><th>股票</th><th>買進訊號次數</th></tr>"
@@ -495,8 +542,8 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
     return f"""<!DOCTYPE html>
 <html lang="zh-TW"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>四策略績效比較 — {today}</title>
-<meta name="description" content="v8.5 / GUARD / SURGE / SURGE PRO 四策略全期權益曲線比較與當日訊號。法人資料來源：appr1ciat1/tw-institutional-stocker。">
+<title>Paper Trading · {t_disp} — {today}</title>
+<meta name="description" content="{t_disp} 策略 paper trading：當日買賣訊號、過去兩個月績效、四策略比較。法人資料來源：appr1ciat1/tw-institutional-stocker。">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
  body{{font-family:system-ui,"Noto Sans TC",sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:28px 16px}}
@@ -517,8 +564,9 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
  table.note tr:last-child td{{border-bottom:none}}
  table.note td.nk{{color:#93c5fd;font-weight:700;white-space:nowrap;width:1%;vertical-align:top;background:#132033}}
 </style></head><body><div class="wrap">
- <h1>📈 Paper Trading · 四策略</h1>
- <p class="sub">v8.5 / GUARD / SURGE / SURGE PRO 全期權益曲線（log 軸，起點=100）+ 最強 SURGE PRO 的當日買賣訊號與近兩個月績效。每個台股交易日收盤後自動更新。資料：{today}。</p>
+ <h1>📈 Paper Trading · <span style="color:{t_color}">{t_disp}</span> <span style="font-size:1rem;color:#94a3b8">（{t_role}）</span></h1>
+ <p class="sub">追蹤 <b style="color:{t_color}">{t_disp}</b> 策略的當日買賣訊號與近兩個月績效，附四策略全期權益曲線比較。每個台股交易日收盤後自動更新。資料：{today}。
+ <br>另有：<a href="paper_trading.html">SURGE PRO paper</a> · <a href="paper_trading_guard.html">GUARD paper</a> · <a href="index.html">策略選單</a></p>
 
  <div class="card">
    <canvas id="eq" height="150"></canvas>
@@ -539,7 +587,7 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
  <h2>📌 選哪個策略？（依市場情境）</h2>
  <div class="card">{guide_html}</div>
 
- <h2>📋 今日買賣訊號（SURGE PRO，最強策略）</h2>
+ <h2>📋 今日買賣訊號（{t_disp}）</h2>
  <div class="card">{sig_html}</div>
 
  {inst_widget_html}
@@ -547,12 +595,12 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
  <h2>🔁 近 30 日歷史買進訊號（3 輪 × 10 交易日，每輪 ≥2 次）</h2>
  <div class="card">{rounds_html}</div>
 
- <h2>🗓️ SURGE PRO 過去兩個月</h2>
+ <h2>🗓️ {t_disp} 過去兩個月</h2>
  <div class="card">{tm_html}</div>
 
  <div class="disclaimer">
    ⚠️ <b>免責：</b>此為回測模擬績效，<b>非真實交易、非未來保證</b>。四策略共用同一組 v8.5 評分（Mom×3 + Trend×1），
-   差別在事件引擎的去風險 / 分段強勢加碼參數（見 <a href="report_surge_pro.html">SURGE PRO 報表</a>）。<br>
+   差別在事件引擎的去風險 / 分段強勢加碼參數（見 <a href="{t_report}">{t_disp} 報表</a>）。<br>
    法人籌碼資料來源：<a href="https://github.com/appr1ciat1/tw-institutional-stocker">appr1ciat1/tw-institutional-stocker</a>。投資有風險，決策請自行負責。
  </div>
 </div>
@@ -589,16 +637,22 @@ new Chart(document.getElementById('eq90').getContext('2d'),{{
 
 
 def main():
-    results, spro_eq, spro_trades, data, eq_map = run_all()
-    sig_file, signals = today_signals()
-    sells = recent_sells(spro_trades, n_days=7)
-    tm_stats, tm_trades = two_month(spro_eq, spro_trades)
+    results, data, eq_map, trades_map = run_all()
+    # 共用區段（與追蹤策略無關）：歷史買進訊號、90 天曲線
     buy_rounds = recent_buy_signal_rounds(data)
     ninety = ninety_day_curves(eq_map, n_days=90)
-    html = build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_rounds, ninety)
-    with open(HTML_FILE, "w", encoding="utf-8") as f:
-        f.write(html)
-    print(f"✅ 已產出 {HTML_FILE}（四策略 + 折線圖 + 當日訊號，無 v9 內容）")
+    for tk in TRACKS:
+        disp = tk["disp"]
+        eq = eq_map.get(disp)
+        trades = trades_map.get(disp)
+        sig_file, signals = today_signals(tk["orders"])
+        sells = recent_sells(trades, n_days=7)
+        tm_stats, tm_trades = two_month(eq, trades)
+        html = build_html(results, sig_file, signals, sells, tm_stats, tm_trades,
+                          buy_rounds, ninety, track=tk)
+        with open(tk["file"], "w", encoding="utf-8") as f:
+            f.write(html)
+        print(f"✅ 已產出 {tk['file']}（追蹤 {disp}，{len(signals)} 買進訊號）")
 
 
 if __name__ == "__main__":

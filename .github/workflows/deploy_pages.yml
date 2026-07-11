@@ -44,6 +44,7 @@ jobs:
           sparse-checkout: |
             stock_report.html
             paper_trading.html
+            paper_trading_guard.html
             backtest_chart.png
             index.html
             report_v85.html
@@ -67,8 +68,8 @@ jobs:
             fi
             cp "$f" _site/
           done
-          # 四策略頁（v8.5 / GUARD / SURGE / SURGE PRO）：可選，缺檔不致命
-          for f in report_v85.html chart_v85.png report_guard.html chart_guard.png report_surge.html chart_surge.png report_surge_pro.html chart_surge_pro.png; do
+          # 四策略頁 + GUARD paper：可選，缺檔不致命
+          for f in report_v85.html chart_v85.png report_guard.html chart_guard.png report_surge.html chart_surge.png report_surge_pro.html chart_surge_pro.png paper_trading_guard.html; do
             if [ -f "$f" ]; then cp "$f" _site/; else echo "optional missing: $f"; fi
           done
           cp .nojekyll _site/ 2>/dev/null || touch _site/.nojekyll

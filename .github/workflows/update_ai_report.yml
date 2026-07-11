@@ -115,6 +115,8 @@ jobs:
             --sl-atr 3.5 --regime-floor 0.0 --dynamic-topk \
             --corr-select-max 0.7 --corr-select-window 60 --corr-select-cap 2 \
             --start-date 2019-01-01 --eval-start 2019-01-01
+          # 保存 GUARD 的當日訂單（下方 SURGE PRO 那步會覆蓋 orders_<date>.json，故先複製給 GUARD paper 用）
+          cp "$(ls -t artifacts/orders_2*.json | head -1)" artifacts/orders_guard_latest.json || true
           sed -e 's#backtest_chart.png#chart_guard.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · GUARD 去風險#g' \
               stock_report.html > report_guard.html
@@ -177,7 +179,7 @@ jobs:
           git config --global user.email "voidful.stack@gmail.com"
           git config --global user.name "Voidful"
 
-          git add stock_report.html backtest_chart.png paper_trading.html paper_equity.json || true
+          git add stock_report.html backtest_chart.png paper_trading.html paper_trading_guard.html paper_equity.json || true
           git add report_v85.html chart_v85.png report_guard.html chart_guard.png index.html || true
           git add report_surge.html chart_surge.png report_surge_pro.html chart_surge_pro.png || true
           git add -u artifacts || true
