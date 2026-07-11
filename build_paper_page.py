@@ -76,7 +76,7 @@ def _stock_link(ticker):
         suf = ".TW"
     else:
         suf = ".TWO" if market.upper() in ("TPEX", "OTC", "TWO", "櫃買", "上櫃") else ".TW"
-    url = f"https://finance.yahoo.com/quote/{code}{suf}"
+    url = f"https://tw.stock.yahoo.com/quote/{code}{suf}"
     label = f"{code}{('&nbsp;' + name) if name else ''}"
     return f"<a href='{url}' target='_blank' rel='noopener'>{label}</a>"
 
