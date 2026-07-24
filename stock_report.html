@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 台股量化交易 · SURGE PRO 追最高報酬 — 2026-07-24</title>
+    <meta name="description" content="AI 驅動的台股量化交易系統 v8.5，完整風險報告、Benchmark 對比與交易計畫">
+    <script>
+        (function() {
+            let savedTheme = null;
+            try { savedTheme = localStorage.getItem('tw-stocker-theme'); } catch (error) {}
+            document.documentElement.dataset.theme = savedTheme === 'light' ? 'light' : 'dark';
+        })();
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html {
+            width: 100%;
+            overflow-x: hidden;
+            color-scheme: dark;
+        }
+        :root {
+            --bg: #0b0f14;
+            --surface: #111820;
+            --surface-soft: #17212b;
+            --text: #eef4fb;
+            --muted: #94a3b8;
+            --border: #283545;
+            --line: #1f2a37;
+            --blue: #38bdf8;
+            --green: #34d399;
+            --red: #fb7185;
+            --orange: #fbbf24;
+            --purple: #c084fc;
+            --shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+            --card-border: rgba(148, 163, 184, 0.16);
+            --hover: rgba(148, 163, 184, 0.08);
+            --badge-bg: #1f2937;
+            --toggle-bg: rgba(17, 24, 39, 0.86);
+            --toggle-border: rgba(148, 163, 184, 0.26);
+        }
+        html[data-theme="light"] {
+            color-scheme: light;
+            --bg: #f5f5f7;
+            --surface: #ffffff;
+            --surface-soft: #fbfbfd;
+            --text: #1d1d1f;
+            --muted: #686872;
+            --border: #d2d2d7;
+            --line: #f2f2f7;
+            --blue: #007aff;
+            --green: #248a3d;
+            --red: #d70015;
+            --orange: #bf6a02;
+            --purple: #af52de;
+            --shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
+            --card-border: rgba(0, 0, 0, 0.04);
+            --hover: #f7f7fa;
+            --badge-bg: #e8e8ed;
+            --toggle-bg: rgba(255, 255, 255, 0.88);
+            --toggle-border: rgba(0, 0, 0, 0.10);
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            padding: 40px clamp(12px, 4vw, 24px);
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            min-width: 0;
+            overflow-x: hidden;
+        }
+        .container {
+            width: 100%;
+            max-width: 1120px;
+            min-width: 0;
+            margin: 0 auto;
+        }
+        .theme-toggle {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 20;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 38px;
+            padding: 8px 12px;
+            border: 1px solid var(--toggle-border);
+            border-radius: 999px;
+            background: var(--toggle-bg);
+            color: var(--text);
+            box-shadow: var(--shadow);
+            font: inherit;
+            font-weight: 650;
+            cursor: pointer;
+            backdrop-filter: blur(12px);
+        }
+        .theme-toggle:hover { transform: translateY(-1px); }
+        .theme-icon {
+            display: inline-grid;
+            width: 18px;
+            height: 18px;
+            place-items: center;
+            font-size: 0.98rem;
+            line-height: 1;
+        }
+        .theme-label { font-size: 0.82rem; }
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 650;
+            letter-spacing: 0;
+            text-align: center;
+            margin-bottom: 8px;
+        }
+        h2 {
+            font-size: 1.35rem;
+            font-weight: 650;
+            letter-spacing: 0;
+            margin-top: 40px;
+            margin-bottom: 14px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+        .subtitle {
+            color: var(--muted);
+            font-size: 0.95rem;
+            text-align: center;
+            margin-bottom: 32px;
+            font-weight: 500;
+            overflow-wrap: anywhere;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+            gap: 14px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: var(--surface);
+            padding: 18px 16px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid var(--card-border);
+            box-shadow: var(--shadow);
+            min-width: 0;
+        }
+        .stat-card.risk { border-top: 3px solid var(--purple); }
+        .stat-card.benchmark { border-top: 3px solid var(--orange); }
+        .stat-card .value {
+            font-size: 1.55rem;
+            font-weight: 650;
+            margin: 6px 0;
+            letter-spacing: 0;
+        }
+        .stat-card .label {
+            font-size: 0.75rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            font-weight: 600;
+        }
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin-top: 10px;
+            background: var(--surface);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            overflow: hidden;
+            max-width: 100%;
+        }
+        th, td {
+            padding: 13px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--line);
+            font-size: 0.88rem;
+            vertical-align: top;
+            overflow-wrap: anywhere;
+        }
+        th {
+            background: var(--surface-soft);
+            color: var(--muted);
+            font-weight: 600;
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+        }
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background: var(--hover); }
+        img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            margin-top: 14px;
+            border: 1px solid var(--card-border);
+            box-shadow: var(--shadow);
+        }
+        .disclaimer {
+            margin-top: 52px;
+            padding: 22px;
+            background: var(--surface);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            font-size: 0.85rem;
+            color: var(--muted);
+            line-height: 1.6;
+            text-align: center;
+            box-shadow: var(--shadow);
+        }
+        .config-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: #e8e8ed;
+            background: var(--badge-bg);
+            color: var(--text);
+            margin: 2px;
+        }
+        .section-note {
+            font-size: 0.85rem;
+            color: var(--muted);
+            margin-bottom: 10px;
+        }
+        a { color: var(--blue); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        span[style*="color:#00ff00"], b[style*="color:#00ff00"], div[style*="color:#00ff00"], td[style*="color:#00ff00"] { color: var(--green) !important; }
+        span[style*="color:#ff4444"], b[style*="color:#ff4444"], div[style*="color:#ff4444"], td[style*="color:#ff4444"] { color: var(--red) !important; }
+        span[style*="color:#ffab00"], div[style*="color:#ffab00"], td[style*="color:#ffab00"] { color: var(--orange) !important; }
+        span[style*="color:#00e5ff"], h3[style*="color:#00e5ff"] { color: var(--blue) !important; }
+        span[style*="color:#aaaaaa"], span[style*="color:#888"], td[style*="color:#888"] { color: var(--muted) !important; }
+        div[style*="background:#00ff00"] { background: var(--green) !important; }
+        div[style*="background:#ff4444"] { background: var(--red) !important; }
+        div[style*="background:linear-gradient"] { filter: brightness(0.9) saturate(1.2); }
+        .split-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 20px;
+        }
+        .split-grid > div { min-width: 0; }
+        @media (max-width: 720px) {
+            body { padding: 56px 10px 24px; }
+            .theme-toggle {
+                top: 10px;
+                right: 10px;
+                min-height: 34px;
+                padding: 7px 10px;
+            }
+            .theme-label { font-size: 0.76rem; }
+            h1 { font-size: 1.7rem; }
+            h2 { font-size: 1.15rem; margin-top: 30px; }
+            .subtitle {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 6px;
+            }
+            .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+            .stat-card { padding: 14px 12px; }
+            .stat-card .value { font-size: 1.25rem; }
+            .split-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+            table {
+                display: block;
+                width: 100%;
+                max-width: 100%;
+                overflow-x: auto;
+                white-space: nowrap;
+                -webkit-overflow-scrolling: touch;
+            }
+            th, td { white-space: nowrap; }
+            td:nth-child(5), td:nth-child(6), .disclaimer {
+                white-space: normal;
+                min-width: 220px;
+            }
+            th, td { padding: 11px 12px; font-size: 0.82rem; }
+        }
+        @media (max-width: 420px) {
+            .stats { grid-template-columns: minmax(0, 1fr); }
+            .config-badge { max-width: 100%; white-space: normal; }
+        }
+    </style>
+</head>
+<body>
+<button class="theme-toggle" id="themeToggle" type="button" aria-label="切換深色與淺色主題" aria-pressed="true">
+    <span class="theme-icon" aria-hidden="true">☾</span>
+    <span class="theme-label">深色</span>
+</button>
+<div class="container">
+
+    <h1>🎯 AI 台股量化交易 · SURGE PRO 追最高報酬</h1>
+    <p class="subtitle">
+        Event-Driven System &nbsp;|&nbsp; 報表日期: 2026-07-24 &nbsp;|&nbsp;
+        <span class="config-badge">🛡️ ATR×4.0/3.5</span>
+        <span class="config-badge">🎯 Top-7</span>
+        <span class="config-badge">⏱️ 最長 25 天</span>
+        <span class="config-badge">💰 成本: 買 0.143% + 賣 0.443%</span>
+    </p>
+
+    
+
+    <h2>📊 績效總覽</h2>
+    <div class="stats">
+        <div class="stat-card">
+            <div class="label">策略總報酬率</div>
+            <div class="value" style="color:#00ff00;">+1654.2%</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">年化報酬率</div>
+            <div class="value" style="color:#00ff00;">+50.3%</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">年化波動率</div>
+            <div class="value">27.7%</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">Sharpe Ratio</div>
+            <div class="value" style="color:#00ff00;">1.61</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">Sortino Ratio</div>
+            <div class="value">2.40</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">最大回撤</div>
+            <div class="value" style="color:#ff4444;">-24.3%</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">Calmar Ratio</div>
+            <div class="value">2.07</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">完成交易數</div>
+            <div class="value">791</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">勝率</div>
+            <div class="value" style="color:#00ff00;">56.3%</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Profit Factor</div>
+            <div class="value">1.79</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">平均報酬/筆</div>
+            <div class="value">+3.65%</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">平均持有天數</div>
+            <div class="value">16</div>
+        </div>
+    </div>
+
+    <h2>🚀 今日 AI 交易執行單</h2>
+    <p class="section-note">
+        信號基於昨日收盤產生，建議於明日開盤價附近掛單進場。
+        最晚出場日使用 XTAI 交易日曆計算
+    </p>
+    <table>
+        <thead>
+            <tr>
+                <th>股票代號</th>
+                <th>AI 評分</th>
+                <th>今日收盤</th>
+                <th>操作狀態</th>
+                <th>🎯 區間執行計畫</th>
+                <th>📊 歷史績效</th>
+                <th>🏛️ 籌碼</th>
+                <th>📰 新聞</th>
+            </tr>
+        </thead>
+        <tbody>
+<tr><td>6505</td><td>4.00</td><td>85.8</td><td><span style="color:#00ff00; font-weight:bold;">🟢 建議買進 #1</span></td><td><b>停利:</b> <span style="color:#00ff00">106.0</span> (+23.5%) <br><b>停損:</b> <span style="color:#ff4444">68.2</span> (-20.6%) <br><b>最晚出場:</b> 2026-08-28</td><td><span style="font-size:0.72rem; color:#555;">歷史資料不足</span></td><td><span style="font-size:0.78rem;">🟡 小買<br><span style="color:#ffab00; font-weight:bold;">+1.2%</span></span></td><td><span style="font-size:0.78rem;">⚪ 中性</span></td></tr>
+<tr><td>2634</td><td>3.92</td><td>65.4</td><td><span style="color:#00ff00; font-weight:bold;">🟢 建議買進 #2</span></td><td><b>停利:</b> <span style="color:#00ff00">85.2</span> (+30.3%) <br><b>停損:</b> <span style="color:#ff4444">48.1</span> (-26.5%) <br><b>最晚出場:</b> 2026-08-28</td><td><span style="font-size:0.72rem; color:#888;">歷史 <b>6</b>筆 | 勝率 <b style="color:#ff4444">0%</b> | 均報酬 <b style="color:#ff4444">-7.2%</b></span></td><td><span style="font-size:0.78rem;">🟡 小買<br><span style="color:#ffab00; font-weight:bold;">+1.3%</span></span></td><td><span style="font-size:0.78rem;">⚪ 中性</span></td></tr>
+<tr><td>1326</td><td>3.75</td><td>67.5</td><td><span style="color:#00ff00; font-weight:bold;">🟢 建議買進 #3</span></td><td><b>停利:</b> <span style="color:#00ff00">85.9</span> (+27.3%) <br><b>停損:</b> <span style="color:#ff4444">51.4</span> (-23.9%) <br><b>最晚出場:</b> 2026-08-28</td><td><span style="font-size:0.72rem; color:#555;">歷史資料不足</span></td><td><span style="font-size:0.78rem;">⚪ 無資料<br><span style="color:#888; font-weight:bold;">+0.0%</span></span></td><td><span style="font-size:0.78rem;">⚪ 中性</span></td></tr>
+<tr><td>6669</td><td>3.72</td><td>5730.0</td><td><span style="color:#00ff00; font-weight:bold;">🟢 建議買進 #4</span></td><td><b>停利:</b> <span style="color:#00ff00">6890.0</span> (+20.2%) <br><b>停損:</b> <span style="color:#ff4444">4715.0</span> (-17.7%) <br><b>最晚出場:</b> 2026-08-28</td><td><span style="font-size:0.72rem; color:#888;">歷史 <b>16</b>筆 | 勝率 <b style="color:#00ff00">50%</b> | 均報酬 <b style="color:#ff4444">-0.9%</b></span></td><td><span style="font-size:0.78rem;">🟡 小買<br><span style="color:#ffab00; font-weight:bold;">+1.0%</span></span></td><td><span style="font-size:0.78rem;">⚪ 中性</span></td></tr>
+<tr><td>2395</td><td>3.72</td><td>581.0</td><td><span style="color:#00ff00; font-weight:bold;">🟢 建議買進 #5</span></td><td><b>停利:</b> <span style="color:#00ff00">694.2</span> (+19.5%) <br><b>停損:</b> <span style="color:#ff4444">482.0</span> (-17.0%) <br><b>最晚出場:</b> 2026-08-28</td><td><span style="font-size:0.72rem; color:#888;">歷史 <b>2</b>筆 | 勝率 <b style="color:#ff4444">0%</b> | 均報酬 <b style="color:#ff4444">-4.3%</b></span></td><td><span style="font-size:0.78rem;">⚪ 無資料<br><span style="color:#888; font-weight:bold;">+0.0%</span></span></td><td><span style="font-size:0.78rem;">⚪ 中性</span></td></tr>
+<tr><td>1301</td><td>3.63</td><td>62.7</td><td><span style="color:#00ff00; font-weight:bold;">🟢 建議買進 #6</span></td><td><b>停利:</b> <span style="color:#00ff00">77.2</span> (+23.2%) <br><b>停損:</b> <span style="color:#ff4444">50.0</span> (-20.3%) <br><b>最晚出場:</b> 2026-08-28</td><td><span style="font-size:0.72rem; color:#555;">歷史資料不足</span></td><td><span style="font-size:0.78rem;">🟡 小買<br><span style="color:#ffab00; font-weight:bold;">+1.4%</span></span></td><td><span style="font-size:0.78rem;">⚪ 中性</span></td></tr>
+<tr><td>1303</td><td>3.63</td><td>177.5</td><td><span style="color:#00ff00; font-weight:bold;">🟢 建議買進 #7</span></td><td><b>停利:</b> <span style="color:#00ff00">247.4</span> (+39.4%) <br><b>停損:</b> <span style="color:#ff4444">116.4</span> (-34.4%) <br><b>最晚出場:</b> 2026-08-28</td><td><span style="font-size:0.72rem; color:#888;">歷史 <b>8</b>筆 | 勝率 <b style="color:#00ff00">75%</b> | 均報酬 <b style="color:#00ff00">+10.7%</b></span></td><td><span style="font-size:0.78rem;">⚪ 無資料<br><span style="color:#888; font-weight:bold;">+0.0%</span></span></td><td><span style="font-size:0.78rem;">⚪ 中性</span></td></tr>
+<tr style="opacity:0.6"><td>3231</td><td>3.63</td><td>179.0</td><td><span style="color:#ffab00">🟡 候選 (超出 Top-K)</span></td><td>-</td><td><span style="font-size:0.72rem; color:#888;">勝率 <b style="color:#00ff00">59%</b></span></td><td><span style="font-size:0.72rem;">🟢 大買<br><span style="color:#00ff00">+3.4%</span></span></td><td><span style="font-size:0.72rem;">⚪ 中性</span></td></tr>
+<tr style="opacity:0.6"><td>2887</td><td>3.37</td><td>34.2</td><td><span style="color:#ffab00">🟡 候選 (超出 Top-K)</span></td><td>-</td><td><span style="font-size:0.72rem; color:#888;">勝率 <b style="color:#ff4444">0%</b></span></td><td><span style="font-size:0.72rem;">⚪ 無資料<br><span style="color:#888">+0.0%</span></span></td><td><span style="font-size:0.72rem;">⚪ 中性</span></td></tr>
+<tr style="opacity:0.6"><td>2357</td><td>3.35</td><td>771.0</td><td><span style="color:#ffab00">🟡 候選 (超出 Top-K)</span></td><td>-</td><td><span style="font-size:0.72rem; color:#888;">勝率 <b style="color:#00ff00">75%</b></span></td><td><span style="font-size:0.72rem;">🟢 大買<br><span style="color:#00ff00">+2.6%</span></span></td><td><span style="font-size:0.72rem;">⚪ 中性</span></td></tr>
+<tr style="opacity:0.6"><td>2377</td><td>3.28</td><td>146.5</td><td><span style="color:#ffab00">🟡 候選 (超出 Top-K)</span></td><td>-</td><td><span style="font-size:0.72rem; color:#888;">勝率 <b style="color:#ff4444">33%</b></span></td><td><span style="font-size:0.72rem;">🟢 大買<br><span style="color:#00ff00">+7.1%</span></span></td><td><span style="font-size:0.72rem;">⚪ 中性</span></td></tr>
+<tr style="opacity:0.6"><td>6446</td><td>3.20</td><td>1135.0</td><td><span style="color:#ffab00">🟡 候選 (超出 Top-K)</span></td><td>-</td><td><span style="font-size:0.72rem; color:#888;">勝率 <b style="color:#00ff00">50%</b></span></td><td><span style="font-size:0.72rem;">⚪ 無資料<br><span style="color:#888">+0.0%</span></span></td><td><span style="font-size:0.72rem;">⚪ 中性</span></td></tr>
+<tr style="opacity:0.4"><td>2301</td><td>2.58</td><td>214.5</td><td><span style="color:#aaaaaa">⚪ 觀望 (低於 MA)</span></td><td>-</td><td>-</td><td style="color:#555">-</td><td style="color:#555">-</td></tr>
+<tr style="opacity:0.4"><td>6285</td><td>2.48</td><td>249.5</td><td><span style="color:#aaaaaa">⚪ 觀望 (低於 MA)</span></td><td>-</td><td>-</td><td style="color:#555">-</td><td style="color:#555">-</td></tr>
+<tr style="opacity:0.4"><td>3017</td><td>2.38</td><td>2380.0</td><td><span style="color:#aaaaaa">⚪ 觀望 (低於 MA)</span></td><td>-</td><td>-</td><td style="color:#555">-</td><td style="color:#555">-</td></tr>
+<tr style="opacity:0.4"><td>5274O</td><td>2.10</td><td>14730.0</td><td><span style="color:#aaaaaa">⚪ 觀望 (低於 MA)</span></td><td>-</td><td>-</td><td style="color:#555">-</td><td style="color:#555">-</td></tr>
+<tr style="opacity:0.4"><td>3045</td><td>1.98</td><td>113.5</td><td><span style="color:#aaaaaa">⚪ 觀望 (評分不足)</span></td><td>-</td><td>-</td><td style="color:#555">-</td><td style="color:#555">-</td></tr>
+
+        </tbody>
+    </table>
+
+
+<section class="lchip-widget" id="lchipWidget">
+  <h2>🏛️ 法人籌碼排行（外資／投信／自營商／主力／三大法人合計）</h2>
+  <p class="lchip-note">
+    口徑同券商 App：一律依「N 日累計買賣超張數」排序，官方每日數據加總、可逐檔對帳。
+    資料源：<a href="https://appr1ciat1.github.io/tw-institutional-stocker/" target="_blank" rel="noopener">tw-institutional-stocker</a>
+    <span id="lchipAsof"></span>
+  </p>
+  <div class="lchip-controls">
+    <label>類別
+      <select id="lchipCat">
+        <option value="foreign">外資</option>
+        <option value="trust">投信</option>
+        <option value="dealer">自營商</option>
+        <option value="main_force">主力（券商分點）</option>
+        <option value="three_inst_net">三大法人合計</option>
+      </select>
+    </label>
+    <label>時間段
+      <select id="lchipWin">
+        <option value="3">3 日</option>
+        <option value="5" selected>5 日</option>
+        <option value="10">10 日</option>
+        <option value="20">20 日</option>
+      </select>
+    </label>
+    <label>方向
+      <select id="lchipDir">
+        <option value="up">買超</option>
+        <option value="down">賣超</option>
+      </select>
+    </label>
+    <label class="lchip-check"><input type="checkbox" id="lchipEtf" checked> 排除 ETF</label>
+  </div>
+  <div class="lchip-tablewrap">
+    <table class="lchip-table" id="lchipTable">
+      <thead><tr id="lchipHead"></tr></thead>
+      <tbody id="lchipBody"><tr><td>載入中…</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<style>
+.lchip-widget{margin:22px 0;padding:18px;border-radius:12px;background:rgba(255,255,255,.03);
+  border:1px solid rgba(255,255,255,.08);}
+.lchip-widget h2{margin:0 0 6px;font-size:1.15rem;}
+.lchip-note{margin:0 0 12px;font-size:.82rem;color:#9aa;line-height:1.5;}
+.lchip-note a{color:#4FC3F7;}
+.lchip-controls{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin-bottom:12px;}
+.lchip-controls label{font-size:.85rem;color:#cbd;display:inline-flex;align-items:center;gap:6px;}
+.lchip-controls select{background:#1b1b28;color:#eee;border:1px solid #3a3a52;border-radius:6px;
+  padding:5px 8px;font-size:.85rem;}
+.lchip-check{cursor:pointer;}
+.lchip-tablewrap{overflow-x:auto;}
+.lchip-table{width:100%;border-collapse:collapse;font-size:.84rem;}
+.lchip-table th,.lchip-table td{padding:6px 9px;text-align:right;white-space:nowrap;
+  border-bottom:1px solid rgba(255,255,255,.06);}
+.lchip-table th:nth-child(2),.lchip-table td:nth-child(2){text-align:left;}
+.lchip-table th{color:#8b8b9e;font-weight:600;position:sticky;top:0;background:#15151f;}
+.lchip-table tbody tr:hover{background:rgba(255,255,255,.04);}
+.lchip-badge{display:inline-block;background:#2a2a40;border-radius:4px;padding:1px 6px;
+  margin-right:6px;font-family:monospace;font-size:.8rem;color:#9cf;}
+.lchip-pos{color:#26de81;font-weight:600;}
+.lchip-neg{color:#ff6b6b;font-weight:600;}
+</style>
+
+<script>
+(function(){
+  var BASE = "https://appr1ciat1.github.io/tw-institutional-stocker/data";
+  var TOP_N = 30;
+  var cat = "foreign", win = "5", dir = "up", excludeEtf = true;
+  var reqSeq = 0;  // 單調遞增請求序號：只套用最新一次 render 的回應，避免快速切換時舊 fetch 覆蓋
+
+  function $(id){ return document.getElementById(id); }
+  function fmt(n){ n = Number(n)||0; return n.toLocaleString(); }
+  function lots(n){ n = Number(n)||0;
+    return '<span class="'+(n>=0?'lchip-pos':'lchip-neg')+'">'+(n>=0?'+':'')+fmt(n)+'</span>'; }
+  function pct(n){ return (Number(n)||0).toFixed(2); }
+  function isEtf(code){ code = String(code||""); return !(code.length===4 && /^[0-9]{4}$/.test(code)); }
+
+  // 各類別：資料檔 + 欄位定義（順序即顯示順序，第2欄固定為「股票」）
+  var COLS = {
+    foreign:        [["買賣超(張)", function(r){return lots(r.net_lots);}],
+                     ["外資持股%", function(r){return pct(r.ratio)+"%";}]],
+    trust:          [["買賣超(張)", function(r){return lots(r.net_lots);}],
+                     ["佔股本%", function(r){return pct(r.pct_cap)+"%";}]],
+    dealer:         [["買賣超(張)", function(r){return lots(r.net_lots);}],
+                     ["佔股本%", function(r){return pct(r.pct_cap)+"%";}]],
+    main_force:     [["主力買賣超(張)", function(r){return lots(r.net_lots);}],
+                     ["分點數", function(r){return String(r.n_brokers||0);}]],
+    three_inst_net: [["合計(張)", function(r){return lots(r.net_lots);}],
+                     ["外資", function(r){return lots(r.foreign_lots);}],
+                     ["投信", function(r){return lots(r.trust_lots);}],
+                     ["自營", function(r){return lots(r.dealer_lots);}],
+                     ["佔股本%", function(r){return pct(r.pct_cap)+"%";}]]
+  };
+
+  function fetchJson(url){
+    return fetch(url).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); });
+  }
+
+  function loadRows(){
+    if(cat === "main_force"){
+      return fetchJson(BASE + "/main_force_rankings.json").then(function(d){
+        var arr = (d.windows && d.windows[win]) ? d.windows[win].slice() : [];
+        if(dir === "down"){ arr.reverse(); }
+        arr = arr.filter(function(r){ return dir==="up" ? r.net_lots>0 : r.net_lots<0; });
+        return { rows: arr, date: d.date };
+      });
+    }
+    var file = (cat === "three_inst_net")
+      ? "top_three_inst_net_" + win + "_" + dir + ".json"
+      : "top_" + cat + "_change_" + win + "_" + dir + ".json";
+    return fetchJson(BASE + "/" + file).then(function(arr){
+      return { rows: arr, date: (arr.length ? arr[0].date : "") };
+    });
+  }
+
+  function render(){
+    var head = $("lchipHead"), body = $("lchipBody");
+    var cols = COLS[cat];
+    var myReq = ++reqSeq;  // 本次請求序號
+    head.innerHTML = "<th>#</th><th>股票</th><th>市場</th>" +
+      cols.map(function(c){ return "<th>"+c[0]+"</th>"; }).join("");
+    body.innerHTML = "<tr><td colspan='"+(3+cols.length)+"'>載入中…</td></tr>";
+
+    loadRows().then(function(res){
+      if(myReq !== reqSeq){ return; }  // 已被更新的請求取代，丟棄舊回應
+      var rows = res.rows.filter(function(r){ return !(excludeEtf && isEtf(r.code)); });
+      $("lchipAsof").textContent = res.date ? "｜資料截至 " + res.date : "";
+      if(!rows.length){
+        body.innerHTML = "<tr><td colspan='"+(3+cols.length)+"'>此條件下無資料</td></tr>";
+        return;
+      }
+      body.innerHTML = rows.slice(0, TOP_N).map(function(r, i){
+        var cells = cols.map(function(c){ return "<td>"+c[1](r)+"</td>"; }).join("");
+        return "<tr><td>"+(i+1)+"</td><td><span class='lchip-badge'>"+r.code+"</span>"+
+          (r.name||"")+"</td><td>"+(r.market||"")+"</td>"+cells+"</tr>";
+      }).join("");
+    }).catch(function(e){
+      if(myReq !== reqSeq){ return; }
+      body.innerHTML = "<tr><td colspan='"+(3+cols.length)+"'>載入失敗："+e.message+"</td></tr>";
+    });
+  }
+
+  function init(){
+    $("lchipCat").addEventListener("change", function(){ cat=this.value; render(); });
+    $("lchipWin").addEventListener("change", function(){ win=this.value; render(); });
+    $("lchipDir").addEventListener("change", function(){ dir=this.value; render(); });
+    $("lchipEtf").addEventListener("change", function(){ excludeEtf=this.checked; render(); });
+    render();
+  }
+  if(document.readyState === "loading"){ document.addEventListener("DOMContentLoaded", init); }
+  else { init(); }
+})();
+</script>
+
+
+    <h2>📈 資金曲線 vs Benchmark</h2>
+
+    <div class="stats">
+        <div class="stat-card benchmark">
+            <div class="label">0050 年化報酬</div>
+            <div class="value">+30.8%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 最大回撤</div>
+            <div class="value">-33.8%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 Sharpe</div>
+            <div class="value">1.35</div>
+        </div>
+        <div class="stat-card" style="border-left-color:#00ff00">
+            <div class="label">超額年化報酬 (α)</div>
+            <div class="value" style="color:#00ff00">+19.5%</div>
+        </div>
+    </div>
+
+    <div class="stats">
+        <div class="stat-card benchmark">
+            <div class="label">00981A 年化報酬</div>
+            <div class="value">+148.3%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">00981A 最大回撤</div>
+            <div class="value">-19.7%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">00981A Sharpe</div>
+            <div class="value">2.86</div>
+        </div>
+        <div class="stat-card" style="border-left-color:#00ff00">
+            <div class="label">超額 vs 00981A (共存期)</div>
+            <div class="value" style="color:#00ff00">+127.0%</div>
+        </div>
+    </div>
+    <img src="backtest_chart.png" alt="AI Quantitative Backtest Equity Curve with Benchmark">
+
+    <h2>🌐 大盤環境診斷</h2>
+    <p class="section-note">判斷目前市場 regime 與近期趨勢，幫助你決定是否積極或保守操作。</p>
+
+    <div class="stats">
+        <div class="stat-card" style="border-left-color:#ff4444">
+            <div class="label">大盤 Regime</div>
+            <div class="value" style="color:#ff4444">🔴 空頭</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 近 5 日</div>
+            <div class="value" style="color:#00ff00">+3.1%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 近 20 日</div>
+            <div class="value" style="color:#ff4444">-2.0%</div>
+        </div>
+        <div class="stat-card benchmark">
+            <div class="label">0050 近 60 日</div>
+            <div class="value" style="color:#00ff00">+13.1%</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">市場波動率 (20D)</div>
+            <div class="value">32.8%</div>
+        </div>
+    </div>
+
+    <h2>📉 回撤深度分析</h2>
+    <p class="section-note">歷史回撤事件的深度與持續時間，識別策略最脆弱的時期。</p>
+
+    <div class="stats">
+        <div class="stat-card risk">
+            <div class="label">目前回撤</div>
+            <div class="value" style="color:#ff4444">-13.2%</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">權益最高點</div>
+            <div class="value">4,042,251</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">歷史回撤次數</div>
+            <div class="value">53</div>
+        </div>
+    </div>
+    <table>
+        <thead><tr><th>#</th><th>開始日</th><th>恢復日</th><th>最大深度</th><th>持續天數</th></tr></thead>
+        <tbody>
+<tr><td>#1</td><td>2021-07-09</td><td>2023-06-01</td><td style="color:#ff4444; font-weight:bold">-24.3%</td><td>692 天</td></tr>
+<tr><td>#2</td><td>2024-03-08</td><td>2025-07-28</td><td style="color:#ff4444; font-weight:bold">-24.0%</td><td>507 天</td></tr>
+<tr><td>#3</td><td>2020-01-30</td><td>2020-06-10</td><td style="color:#ff4444; font-weight:bold">-17.1%</td><td>132 天</td></tr>
+<tr><td>#4</td><td>2026-03-02</td><td>2026-04-13</td><td style="color:#ff4444; font-weight:bold">-16.6%</td><td>42 天</td></tr>
+<tr><td>#5</td><td>2023-07-31</td><td>2024-03-05</td><td style="color:#ff4444; font-weight:bold">-14.7%</td><td>218 天</td></tr>
+
+        </tbody>
+    </table>
+
+    <h2>📊 滾動績效指標 (60 日)</h2>
+    <p class="section-note">近期表現是否仍在健康範圍內，偏離均值時需警惕。</p>
+
+    <div class="stats">
+        <div class="stat-card" style="border-left-color:#00ff00">
+            <div class="label">近 60 日 Sharpe</div>
+            <div class="value" style="color:#00ff00">2.49</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">歷史平均 Sharpe</div>
+            <div class="value">1.35</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">歷史最低 Sharpe</div>
+            <div class="value">-5.40</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">歷史最高 Sharpe</div>
+            <div class="value">8.67</div>
+        </div>
+    </div>
+
+    <h2>🔥 連續盈虧分析</h2>
+    <p class="section-note">連勝/連敗紀錄與近期走勢，評估策略是否處於熱手或冷卻期。</p>
+
+    <div class="stats">
+        <div class="stat-card">
+            <div class="label">最長連勝</div>
+            <div class="value" style="color:#00ff00">39 筆</div>
+        </div>
+        <div class="stat-card risk">
+            <div class="label">最長連敗</div>
+            <div class="value" style="color:#ff4444">13 筆</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">近 5 筆走勢</div>
+            <div class="value" style="font-size:1.2rem">🔴 🔴 🔴 🔴 🔴 </div>
+        </div>
+    </div>
+
+    <h2>📋 出場原因分布統計</h2>
+    <table>
+        <thead><tr><th>出場原因</th><th>次數</th><th>平均報酬</th></tr></thead>
+        <tbody>
+<tr><td>🟢 停利</td><td>343 筆</td><td style="color:#00ff00">+17.11%</td></tr>
+<tr><td>⚪ 時間到期</td><td>267 筆</td><td style="color:#ff4444">-1.03%</td></tr>
+<tr><td>🔴 停損</td><td>181 筆</td><td style="color:#ff4444">-15.29%</td></tr>
+
+        </tbody>
+    </table>
+
+    <h2>📊 報酬分布直方圖</h2>
+    <p class="section-note">每筆交易報酬的分布形狀，正偏態代表策略有良好的尾部收益。</p>
+
+    <table>
+        <thead><tr><th>報酬區間</th><th>筆數</th><th>佔比</th><th>分布</th></tr></thead>
+        <tbody><tr><td>< -15%</td><td>91</td><td>11.5%</td><td><div style="background:#ff4444; width:34.51327433628318%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>-15~-10%</td><td>78</td><td>9.9%</td><td><div style="background:#ff4444; width:29.582806573957015%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>-10~-5%</td><td>79</td><td>10.0%</td><td><div style="background:#ff4444; width:29.962073324905184%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>-5~0%</td><td>67</td><td>8.5%</td><td><div style="background:#ff4444; width:25.410872313527186%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>0~5%</td><td>63</td><td>8.0%</td><td><div style="background:#00ff00; width:23.893805309734514%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>5~10%</td><td>64</td><td>8.1%</td><td><div style="background:#00ff00; width:24.273072060682683%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>10~20%</td><td>224</td><td>28.3%</td><td><div style="background:#00ff00; width:84.95575221238938%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+<tr><td>> 20%</td><td>94</td><td>11.9%</td><td><div style="background:#00ff00; width:35.65107458912769%; height:14px; border-radius:3px; opacity:0.6"></div></td></tr>
+</tbody>
+    </table>
+
+    <h2>🏅 個股績效排行榜</h2>
+    <p class="section-note">哪些股票貢獻最多利潤、哪些持續虧損，幫助判讀信號品質。</p>
+
+    <h3 style="color:#00e5ff; margin-top:16px">🏆 Top 10 貢獻股</h3>
+    <table>
+        <thead><tr><th>股票</th><th>交易數</th><th>勝率</th><th>平均報酬</th><th>總貢獻</th></tr></thead>
+        <tbody><tr><td><b>2383</b></td><td>19</td><td style="color:#00ff00">79%</td><td style="color:#00ff00">+11.0%</td><td style="color:#00ff00; font-weight:bold">+198.0%</td></tr>
+<tr><td><b>3661</b></td><td>28</td><td style="color:#00ff00">68%</td><td style="color:#00ff00">+7.3%</td><td style="color:#00ff00; font-weight:bold">+188.5%</td></tr>
+<tr><td><b>2603</b></td><td>21</td><td style="color:#00ff00">76%</td><td style="color:#00ff00">+8.9%</td><td style="color:#00ff00; font-weight:bold">+177.3%</td></tr>
+<tr><td><b>2609</b></td><td>18</td><td style="color:#00ff00">61%</td><td style="color:#00ff00">+9.7%</td><td style="color:#00ff00; font-weight:bold">+174.5%</td></tr>
+<tr><td><b>3037</b></td><td>20</td><td style="color:#00ff00">70%</td><td style="color:#00ff00">+8.7%</td><td style="color:#00ff00; font-weight:bold">+173.4%</td></tr>
+<tr><td><b>2615</b></td><td>21</td><td style="color:#00ff00">62%</td><td style="color:#00ff00">+8.2%</td><td style="color:#00ff00; font-weight:bold">+163.6%</td></tr>
+<tr><td><b>3443</b></td><td>20</td><td style="color:#00ff00">70%</td><td style="color:#00ff00">+8.5%</td><td style="color:#00ff00; font-weight:bold">+161.9%</td></tr>
+<tr><td><b>2376</b></td><td>16</td><td style="color:#00ff00">81%</td><td style="color:#00ff00">+9.2%</td><td style="color:#00ff00; font-weight:bold">+146.8%</td></tr>
+<tr><td><b>2344</b></td><td>18</td><td style="color:#00ff00">61%</td><td style="color:#00ff00">+8.0%</td><td style="color:#00ff00; font-weight:bold">+127.7%</td></tr>
+<tr><td><b>3017</b></td><td>24</td><td style="color:#00ff00">67%</td><td style="color:#00ff00">+5.0%</td><td style="color:#00ff00; font-weight:bold">+120.6%</td></tr>
+</tbody>
+    </table>
+    <h3 style="color:#ff4444; margin-top:16px">📉 Bottom 5 虧損股</h3>
+    <table>
+        <thead><tr><th>股票</th><th>交易數</th><th>勝率</th><th>平均報酬</th><th>總貢獻</th></tr></thead>
+        <tbody><tr style="opacity:0.7"><td><b>2606</b></td><td>4</td><td style="color:#ff4444">25%</td><td style="color:#ff4444">-9.2%</td><td style="color:#ff4444; font-weight:bold">-36.7%</td></tr>
+<tr style="opacity:0.7"><td><b>2634</b></td><td>6</td><td style="color:#ff4444">0%</td><td style="color:#ff4444">-7.2%</td><td style="color:#ff4444; font-weight:bold">-43.2%</td></tr>
+<tr style="opacity:0.7"><td><b>3149</b></td><td>5</td><td style="color:#ff4444">20%</td><td style="color:#ff4444">-9.6%</td><td style="color:#ff4444; font-weight:bold">-47.9%</td></tr>
+<tr style="opacity:0.7"><td><b>6239</b></td><td>9</td><td style="color:#ff4444">33%</td><td style="color:#ff4444">-5.4%</td><td style="color:#ff4444; font-weight:bold">-48.7%</td></tr>
+<tr style="opacity:0.7"><td><b>2637</b></td><td>6</td><td style="color:#ff4444">17%</td><td style="color:#ff4444">-8.4%</td><td style="color:#ff4444; font-weight:bold">-50.5%</td></tr>
+</tbody>
+    </table>
+
+    <h2>📜 最近交易紀錄 (最新 20 筆)</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>股票</th><th>進場日</th><th>出場日</th>
+                <th>進場價</th><th>出場價</th>
+                <th>觸發原因</th><th>持有天數</th><th>報酬率</th>
+            </tr>
+        </thead>
+        <tbody>
+<tr><td>2404</td><td>2026-06-15</td><td>2026-07-21</td><td>1337.0</td><td>1150.0</td><td>⚪ 時間到期</td><td>25天</td><td style="color:#ff4444; font-weight:bold;">-14.5%</td></tr>
+<tr><td>2344</td><td>2026-06-15</td><td>2026-07-21</td><td>179.5</td><td>155.5</td><td>⚪ 時間到期</td><td>25天</td><td style="color:#ff4444; font-weight:bold;">-13.9%</td></tr>
+<tr><td>6116</td><td>2026-06-22</td><td>2026-07-20</td><td>19.5</td><td>14.1</td><td>🔴 停損</td><td>20天</td><td style="color:#ff4444; font-weight:bold;">-28.3%</td></tr>
+<tr><td>2353</td><td>2026-06-12</td><td>2026-07-20</td><td>36.7</td><td>29.4</td><td>🔴 停損</td><td>25天</td><td style="color:#ff4444; font-weight:bold;">-20.4%</td></tr>
+<tr><td>2881</td><td>2026-06-12</td><td>2026-07-20</td><td>122.8</td><td>123.5</td><td>⚪ 時間到期</td><td>25天</td><td style="color:#ff4444; font-weight:bold;">-0.0%</td></tr>
+<tr><td>6239</td><td>2026-06-12</td><td>2026-07-20</td><td>346.0</td><td>266.5</td><td>⚪ 時間到期</td><td>25天</td><td style="color:#ff4444; font-weight:bold;">-23.4%</td></tr>
+<tr><td>1303</td><td>2026-07-01</td><td>2026-07-15</td><td>176.7</td><td>218.2</td><td>🟢 停利</td><td>10天</td><td style="color:#00ff00; font-weight:bold;">+22.8%</td></tr>
+<tr><td>2327</td><td>2026-07-01</td><td>2026-07-08</td><td>1200.0</td><td>900.7</td><td>🔴 停損</td><td>5天</td><td style="color:#ff4444; font-weight:bold;">-25.4%</td></tr>
+<tr><td>1303</td><td>2026-06-24</td><td>2026-07-01</td><td>144.8</td><td>181.2</td><td>🟢 停利</td><td>5天</td><td style="color:#00ff00; font-weight:bold;">+24.4%</td></tr>
+<tr><td>2327</td><td>2026-06-15</td><td>2026-07-01</td><td>921.0</td><td>1200.0</td><td>🟢 停利</td><td>11天</td><td style="color:#00ff00; font-weight:bold;">+29.5%</td></tr>
+<tr><td>2454</td><td>2026-05-26</td><td>2026-07-01</td><td>4349.0</td><td>4309.2</td><td>⚪ 時間到期</td><td>25天</td><td style="color:#ff4444; font-weight:bold;">-1.5%</td></tr>
+<tr><td>2303</td><td>2026-05-28</td><td>2026-06-24</td><td>142.6</td><td>175.5</td><td>🟢 停利</td><td>18天</td><td style="color:#00ff00; font-weight:bold;">+22.4%</td></tr>
+<tr><td>3481</td><td>2026-06-12</td><td>2026-06-22</td><td>50.5</td><td>69.4</td><td>🟢 停利</td><td>5天</td><td style="color:#00ff00; font-weight:bold;">+36.6%</td></tr>
+<tr><td>2882</td><td>2026-06-12</td><td>2026-06-17</td><td>98.5</td><td>111.9</td><td>🟢 停利</td><td>3天</td><td style="color:#00ff00; font-weight:bold;">+13.0%</td></tr>
+<tr><td>2327</td><td>2026-06-01</td><td>2026-06-15</td><td>759.5</td><td>930.1</td><td>🟢 停利</td><td>10天</td><td style="color:#00ff00; font-weight:bold;">+21.7%</td></tr>
+<tr><td>3481</td><td>2026-05-26</td><td>2026-06-11</td><td>50.8</td><td>41.8</td><td>🔴 停損</td><td>12天</td><td style="color:#ff4444; font-weight:bold;">-18.2%</td></tr>
+<tr><td>6116</td><td>2026-06-02</td><td>2026-06-08</td><td>20.6</td><td>16.6</td><td>🔴 停損</td><td>4天</td><td style="color:#ff4444; font-weight:bold;">-19.8%</td></tr>
+<tr><td>2368</td><td>2026-05-04</td><td>2026-06-08</td><td>1420.0</td><td>1350.4</td><td>⚪ 時間到期</td><td>25天</td><td style="color:#ff4444; font-weight:bold;">-5.5%</td></tr>
+<tr><td>6116</td><td>2026-05-29</td><td>2026-06-02</td><td>16.5</td><td>20.6</td><td>🟢 停利</td><td>2天</td><td style="color:#00ff00; font-weight:bold;">+24.4%</td></tr>
+<tr><td>2327</td><td>2026-05-25</td><td>2026-06-01</td><td>674.2</td><td>800.0</td><td>🟢 停利</td><td>5天</td><td style="color:#00ff00; font-weight:bold;">+18.0%</td></tr>
+
+        </tbody>
+    </table>
+
+    <h2>📅 月度報酬熱圖</h2>
+
+    <table style="max-width:400px">
+        <thead><tr><th>月份</th><th>月報酬</th></tr></thead>
+        <tbody>
+<tr style="background:rgba(255,68,68,0.21)"><td>2019-05</td><td style="color:#ff4444; font-weight:bold">-7.0%</td></tr>
+<tr style="background:rgba(255,68,68,0.02)"><td>2019-06</td><td style="color:#ff4444; font-weight:bold">-0.6%</td></tr>
+<tr style="background:rgba(0,255,0,0.24)"><td>2019-07</td><td style="color:#00ff00; font-weight:bold">+8.2%</td></tr>
+<tr style="background:rgba(0,255,0,0.11)"><td>2019-08</td><td style="color:#00ff00; font-weight:bold">+3.8%</td></tr>
+<tr style="background:rgba(255,68,68,0.01)"><td>2019-09</td><td style="color:#ff4444; font-weight:bold">-0.3%</td></tr>
+<tr style="background:rgba(0,255,0,0.19)"><td>2019-10</td><td style="color:#00ff00; font-weight:bold">+6.4%</td></tr>
+<tr style="background:rgba(255,68,68,0.05)"><td>2019-11</td><td style="color:#ff4444; font-weight:bold">-1.6%</td></tr>
+<tr style="background:rgba(0,255,0,0.15)"><td>2019-12</td><td style="color:#00ff00; font-weight:bold">+4.9%</td></tr>
+<tr style="background:rgba(255,68,68,0.14)"><td>2020-01</td><td style="color:#ff4444; font-weight:bold">-4.6%</td></tr>
+<tr style="background:rgba(255,68,68,0.26)"><td>2020-02</td><td style="color:#ff4444; font-weight:bold">-8.6%</td></tr>
+<tr style="background:rgba(255,68,68,0.01)"><td>2020-03</td><td style="color:#ff4444; font-weight:bold">-0.5%</td></tr>
+<tr style="background:rgba(0,255,0,0.05)"><td>2020-04</td><td style="color:#00ff00; font-weight:bold">+1.8%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2020-05</td><td style="color:#00ff00; font-weight:bold">+11.8%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2020-06</td><td style="color:#00ff00; font-weight:bold">+18.3%</td></tr>
+<tr style="background:rgba(0,255,0,0.00)"><td>2020-07</td><td style="color:#00ff00; font-weight:bold">+0.1%</td></tr>
+<tr style="background:rgba(255,68,68,0.01)"><td>2020-08</td><td style="color:#ff4444; font-weight:bold">-0.3%</td></tr>
+<tr style="background:rgba(255,68,68,0.05)"><td>2020-09</td><td style="color:#ff4444; font-weight:bold">-1.7%</td></tr>
+<tr style="background:rgba(255,68,68,0.11)"><td>2020-10</td><td style="color:#ff4444; font-weight:bold">-3.5%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2020-11</td><td style="color:#00ff00; font-weight:bold">+11.2%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2020-12</td><td style="color:#00ff00; font-weight:bold">+18.2%</td></tr>
+<tr style="background:rgba(255,68,68,0.30)"><td>2021-01</td><td style="color:#ff4444; font-weight:bold">-13.3%</td></tr>
+<tr style="background:rgba(0,255,0,0.08)"><td>2021-02</td><td style="color:#00ff00; font-weight:bold">+2.6%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2021-03</td><td style="color:#00ff00; font-weight:bold">+13.5%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2021-04</td><td style="color:#00ff00; font-weight:bold">+30.8%</td></tr>
+<tr style="background:rgba(255,68,68,0.17)"><td>2021-05</td><td style="color:#ff4444; font-weight:bold">-5.6%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2021-06</td><td style="color:#00ff00; font-weight:bold">+39.5%</td></tr>
+<tr style="background:rgba(255,68,68,0.30)"><td>2021-07</td><td style="color:#ff4444; font-weight:bold">-15.3%</td></tr>
+<tr style="background:rgba(0,255,0,0.08)"><td>2021-08</td><td style="color:#00ff00; font-weight:bold">+2.6%</td></tr>
+<tr style="background:rgba(0,255,0,0.14)"><td>2021-09</td><td style="color:#00ff00; font-weight:bold">+4.7%</td></tr>
+<tr style="background:rgba(0,255,0,0.21)"><td>2021-10</td><td style="color:#00ff00; font-weight:bold">+6.9%</td></tr>
+<tr style="background:rgba(255,68,68,0.14)"><td>2021-11</td><td style="color:#ff4444; font-weight:bold">-4.7%</td></tr>
+<tr style="background:rgba(0,255,0,0.15)"><td>2021-12</td><td style="color:#00ff00; font-weight:bold">+5.0%</td></tr>
+<tr style="background:rgba(255,68,68,0.30)"><td>2022-01</td><td style="color:#ff4444; font-weight:bold">-11.0%</td></tr>
+<tr style="background:rgba(255,68,68,0.00)"><td>2022-02</td><td style="color:#ff4444; font-weight:bold">-0.1%</td></tr>
+<tr style="background:rgba(0,255,0,0.04)"><td>2022-03</td><td style="color:#00ff00; font-weight:bold">+1.2%</td></tr>
+<tr style="background:rgba(255,68,68,0.05)"><td>2022-04</td><td style="color:#ff4444; font-weight:bold">-1.5%</td></tr>
+<tr style="background:rgba(0,255,0,0.00)"><td>2022-05</td><td style="color:#00ff00; font-weight:bold">+0.0%</td></tr>
+<tr style="background:rgba(255,68,68,0.08)"><td>2022-06</td><td style="color:#ff4444; font-weight:bold">-2.7%</td></tr>
+<tr style="background:rgba(255,68,68,0.02)"><td>2022-07</td><td style="color:#ff4444; font-weight:bold">-0.6%</td></tr>
+<tr style="background:rgba(0,255,0,0.11)"><td>2022-08</td><td style="color:#00ff00; font-weight:bold">+3.6%</td></tr>
+<tr style="background:rgba(255,68,68,0.21)"><td>2022-09</td><td style="color:#ff4444; font-weight:bold">-7.1%</td></tr>
+<tr style="background:rgba(0,255,0,0.02)"><td>2022-10</td><td style="color:#00ff00; font-weight:bold">+0.6%</td></tr>
+<tr style="background:rgba(0,255,0,0.05)"><td>2022-11</td><td style="color:#00ff00; font-weight:bold">+1.8%</td></tr>
+<tr style="background:rgba(255,68,68,0.19)"><td>2022-12</td><td style="color:#ff4444; font-weight:bold">-6.3%</td></tr>
+<tr style="background:rgba(0,255,0,0.06)"><td>2023-01</td><td style="color:#00ff00; font-weight:bold">+2.2%</td></tr>
+<tr style="background:rgba(0,255,0,0.24)"><td>2023-02</td><td style="color:#00ff00; font-weight:bold">+8.1%</td></tr>
+<tr style="background:rgba(255,68,68,0.11)"><td>2023-03</td><td style="color:#ff4444; font-weight:bold">-3.6%</td></tr>
+<tr style="background:rgba(0,255,0,0.13)"><td>2023-04</td><td style="color:#00ff00; font-weight:bold">+4.4%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2023-05</td><td style="color:#00ff00; font-weight:bold">+16.1%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2023-06</td><td style="color:#00ff00; font-weight:bold">+16.5%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2023-07</td><td style="color:#00ff00; font-weight:bold">+43.7%</td></tr>
+<tr style="background:rgba(255,68,68,0.11)"><td>2023-08</td><td style="color:#ff4444; font-weight:bold">-3.7%</td></tr>
+<tr style="background:rgba(255,68,68,0.08)"><td>2023-09</td><td style="color:#ff4444; font-weight:bold">-2.7%</td></tr>
+<tr style="background:rgba(255,68,68,0.08)"><td>2023-10</td><td style="color:#ff4444; font-weight:bold">-2.6%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2023-11</td><td style="color:#00ff00; font-weight:bold">+10.0%</td></tr>
+<tr style="background:rgba(255,68,68,0.15)"><td>2023-12</td><td style="color:#ff4444; font-weight:bold">-4.9%</td></tr>
+<tr style="background:rgba(255,68,68,0.03)"><td>2024-01</td><td style="color:#ff4444; font-weight:bold">-1.1%</td></tr>
+<tr style="background:rgba(0,255,0,0.18)"><td>2024-02</td><td style="color:#00ff00; font-weight:bold">+5.9%</td></tr>
+<tr style="background:rgba(255,68,68,0.25)"><td>2024-03</td><td style="color:#ff4444; font-weight:bold">-8.2%</td></tr>
+<tr style="background:rgba(255,68,68,0.00)"><td>2024-04</td><td style="color:#ff4444; font-weight:bold">-0.0%</td></tr>
+<tr style="background:rgba(0,255,0,0.12)"><td>2024-05</td><td style="color:#00ff00; font-weight:bold">+3.9%</td></tr>
+<tr style="background:rgba(0,255,0,0.21)"><td>2024-06</td><td style="color:#00ff00; font-weight:bold">+6.8%</td></tr>
+<tr style="background:rgba(255,68,68,0.23)"><td>2024-07</td><td style="color:#ff4444; font-weight:bold">-7.7%</td></tr>
+<tr style="background:rgba(255,68,68,0.11)"><td>2024-08</td><td style="color:#ff4444; font-weight:bold">-3.8%</td></tr>
+<tr style="background:rgba(0,255,0,0.01)"><td>2024-09</td><td style="color:#00ff00; font-weight:bold">+0.3%</td></tr>
+<tr style="background:rgba(0,255,0,0.21)"><td>2024-10</td><td style="color:#00ff00; font-weight:bold">+7.0%</td></tr>
+<tr style="background:rgba(255,68,68,0.21)"><td>2024-11</td><td style="color:#ff4444; font-weight:bold">-6.9%</td></tr>
+<tr style="background:rgba(0,255,0,0.08)"><td>2024-12</td><td style="color:#00ff00; font-weight:bold">+2.6%</td></tr>
+<tr style="background:rgba(255,68,68,0.14)"><td>2025-01</td><td style="color:#ff4444; font-weight:bold">-4.7%</td></tr>
+<tr style="background:rgba(255,68,68,0.11)"><td>2025-02</td><td style="color:#ff4444; font-weight:bold">-3.6%</td></tr>
+<tr style="background:rgba(255,68,68,0.07)"><td>2025-03</td><td style="color:#ff4444; font-weight:bold">-2.3%</td></tr>
+<tr style="background:rgba(255,68,68,0.00)"><td>2025-04</td><td style="color:#ff4444; font-weight:bold">-0.2%</td></tr>
+<tr style="background:rgba(0,255,0,0.21)"><td>2025-05</td><td style="color:#00ff00; font-weight:bold">+6.9%</td></tr>
+<tr style="background:rgba(0,255,0,0.21)"><td>2025-06</td><td style="color:#00ff00; font-weight:bold">+7.0%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2025-07</td><td style="color:#00ff00; font-weight:bold">+18.1%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2025-08</td><td style="color:#00ff00; font-weight:bold">+21.4%</td></tr>
+<tr style="background:rgba(0,255,0,0.17)"><td>2025-09</td><td style="color:#00ff00; font-weight:bold">+5.5%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2025-10</td><td style="color:#00ff00; font-weight:bold">+29.0%</td></tr>
+<tr style="background:rgba(0,255,0,0.15)"><td>2025-11</td><td style="color:#00ff00; font-weight:bold">+5.0%</td></tr>
+<tr style="background:rgba(0,255,0,0.07)"><td>2025-12</td><td style="color:#00ff00; font-weight:bold">+2.3%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2026-01</td><td style="color:#00ff00; font-weight:bold">+19.1%</td></tr>
+<tr style="background:rgba(0,255,0,0.07)"><td>2026-02</td><td style="color:#00ff00; font-weight:bold">+2.4%</td></tr>
+<tr style="background:rgba(255,68,68,0.27)"><td>2026-03</td><td style="color:#ff4444; font-weight:bold">-9.1%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2026-04</td><td style="color:#00ff00; font-weight:bold">+26.4%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2026-05</td><td style="color:#00ff00; font-weight:bold">+27.9%</td></tr>
+<tr style="background:rgba(0,255,0,0.30)"><td>2026-06</td><td style="color:#00ff00; font-weight:bold">+15.3%</td></tr>
+<tr style="background:rgba(255,68,68,0.30)"><td>2026-07</td><td style="color:#ff4444; font-weight:bold">-12.5%</td></tr>
+
+        </tbody>
+    </table>
+
+    <div class="disclaimer">
+        ⚠️ <b>免責聲明：</b>本報表由 AI 量化模型自動產出，僅供學術研究與技術交流之用，
+        不構成任何投資建議。歷史回測績效不代表未來實際報酬，投資有風險，決策請自行負責。
+        <br><br>
+        <b>v8.5 方法論：</b>Entry = t+1 open | TP/SL = ATR×4.0/3.5 | 選股 = Top-7 cross-sectional rank | 
+        成本 = 買 0.143% + 賣 0.443% | 回測期 = 7.0 年 | 因子 = Mom(20d)×3 + Trend(60MA)×1
+    </div>
+
+</div>
+<script>
+    (function() {
+        const button = document.getElementById('themeToggle');
+        if (!button) return;
+        const icon = button.querySelector('.theme-icon');
+        const label = button.querySelector('.theme-label');
+
+        function setTheme(theme) {
+            const nextTheme = theme === 'light' ? 'light' : 'dark';
+            document.documentElement.dataset.theme = nextTheme;
+            try { localStorage.setItem('tw-stocker-theme', nextTheme); } catch (error) {}
+            button.setAttribute('aria-pressed', String(nextTheme === 'dark'));
+            if (icon) icon.textContent = nextTheme === 'dark' ? '☾' : '☀';
+            if (label) label.textContent = nextTheme === 'dark' ? '深色' : '淺色';
+        }
+
+        setTheme(document.documentElement.dataset.theme || 'dark');
+        button.addEventListener('click', function() {
+            setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+        });
+    })();
+</script>
+</body>
+</html>
