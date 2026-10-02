@@ -1,0 +1,114 @@
+name: Regenerate orders for a past date (audit only)
+
+# 用途：事後重算「某個訊號日」應該產生的 GUARD / SURGE PRO 訂單，供稽核比對。
+# - 只上傳 Actions artifact，不 commit、不 push、不觸發 Pages 部署。
+# - 用 --end-date = 訊號日 + 1 天（yfinance 的 end 不含當天），資料只到訊號日，無前視。
+# - 策略參數必須與 update_ai_report.yml 完全一致（test_data_integrity.py 會檢查）。
+# 注意：yfinance 預設回傳除權息調整後價格；若訊號日之後有除權息，重算價格會與當天略有差異。
+
+on:
+  workflow_dispatch:
+    inputs:
+      signal_date:
+        description: '訊號日 YYYY-MM-DD（例：2026-10-01 → 重算 orders_20261001，執行日為下一個交易日）'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regenerate-orders-${{ github.event.inputs.signal_date }}
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate signal date
+        id: d
+        env:
+          SIGNAL_DATE: ${{ github.event.inputs.signal_date }}
+        run: |
+          python - <<'PY'
+          import os, datetime
+          import exchange_calendars as xcals, pandas as pd
+          s = os.environ["SIGNAL_DATE"].strip()
+          d = datetime.date.fromisoformat(s)          # 格式錯誤會直接失敗
+          if not xcals.get_calendar("XTAI").is_session(pd.Timestamp(d)):
+              print(f"::warning::{d} 不是 XTAI 交易日；仍會執行，但多半抓不到當日資料")
+          end = d + datetime.timedelta(days=1)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"date={d.isoformat()}\ncompact={d.strftime('%Y%m%d')}\nend={end.isoformat()}\n")
+          print("signal_date", d, "end_date(exclusive)", end)
+          PY
+
+      # 參數與 update_ai_report.yml 的 GUARD 步驟相同（另加 --end-date）
+      - name: GUARD (mom_guard)
+        run: |
+          python ai_report.py \
+            --no-hybrid-tiered --consec-loss-limit 3 \
+            --sl-atr 3.5 --regime-floor 0.0 --dynamic-topk \
+            --corr-select-max 0.7 --corr-select-window 60 --corr-select-cap 2 \
+            --start-date 2019-01-01 --eval-start 2019-01-01 \
+            --end-date ${{ steps.d.outputs.end }}
+          mkdir -p regenerated
+          test -f artifacts/orders_${{ steps.d.outputs.compact }}.json || {
+            echo "::error::GUARD 沒有產生 orders_${{ steps.d.outputs.compact }}.json（最新 bar 不是訊號日，資料缺漏？）"; exit 1; }
+          cp artifacts/orders_${{ steps.d.outputs.compact }}.json   regenerated/orders_guard_${{ steps.d.outputs.compact }}.json
+          cp artifacts/metadata_${{ steps.d.outputs.compact }}.json regenerated/metadata_guard_${{ steps.d.outputs.compact }}.json
+          cp stock_report.html regenerated/report_guard_${{ steps.d.outputs.compact }}.html
+
+      # 參數與 update_ai_report.yml 的 SURGE PRO 步驟相同（另加 --end-date）
+      - name: SURGE PRO (mom_surge_pro)
+        run: |
+          python ai_report.py \
+            --no-hybrid-tiered --consec-loss-limit 3 \
+            --sl-atr 3.5 --hold-days 25 --position-size 0.10 \
+            --regime-floor 0.0 --dynamic-topk --dynamic-gap-filter \
+            --regime-sizing --strong-regime-mult 1.25 --strong-breadth-min 0.55 \
+            --strong-vix-max 28.0 --max-regime-scale 1.9 \
+            --strong-tiers "0.62,18,1.7;0.72,15,1.85" \
+            --start-date 2019-01-01 --eval-start 2019-01-01 \
+            --end-date ${{ steps.d.outputs.end }}
+          test -f artifacts/orders_${{ steps.d.outputs.compact }}.json || {
+            echo "::error::SURGE PRO 沒有產生 orders_${{ steps.d.outputs.compact }}.json"; exit 1; }
+          cp artifacts/orders_${{ steps.d.outputs.compact }}.json   regenerated/orders_surge_pro_${{ steps.d.outputs.compact }}.json
+          cp artifacts/metadata_${{ steps.d.outputs.compact }}.json regenerated/metadata_surge_pro_${{ steps.d.outputs.compact }}.json
+          cp stock_report.html regenerated/report_surge_pro_${{ steps.d.outputs.compact }}.html
+
+      - name: Summary
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, json
+          print("## 重算訂單（僅稽核用，未部署）\n")
+          for f in sorted(glob.glob("regenerated/orders_*.json")):
+              p = json.load(open(f, encoding="utf-8"))
+              print(f"### {f.split('/')[-1]}  signal_date={p.get('signal_date')}\n")
+              print("| # | 代號 | 參考價 | 停利 | 停損 | 執行日 |\n|---|---|---|---|---|---|")
+              for o in p["orders"]:
+                  print(f"| {o['rank']} | {o['ticker']} | {o['reference_close']} | {o['tp_price']} | "
+                        f"{o['sl_price']} | {o['execution_date']} |")
+              print()
+          PY
+
+      - name: Upload regenerated orders
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regenerated-orders-${{ steps.d.outputs.compact }}
+          path: regenerated/
+          if-no-files-found: warn
+          retention-days: 90

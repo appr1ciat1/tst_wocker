@@ -331,3 +331,93 @@ def test_workflow_guards_are_wired():
     upload = next(s for s in steps if s.get('uses', '').startswith('actions/upload-artifact'))
     assert 'orders_*.json' in upload['with']['path']
     assert 'always()' in upload['if']
+
+
+# ── 欄位順序（同分決勝依欄位順序，順序變了選股就變）────────────────
+@pytest.mark.parametrize('vendor_sorts', [False, True])
+def test_column_order_matches_live_order(monkeypatch, vendor_sorts):
+    """上市股維持下載順序，.TWO 補抓的上櫃股在最後：與 5/26 以來上線行為一致。"""
+    base = _fake_download_factory()
+
+    def dl(symbols, **kw):
+        df = base(symbols, **kw)
+        return df.sort_index(axis=1, level=[0, 1]) if vendor_sorts else df
+
+    monkeypatch.setattr(S.yf, 'download', dl)
+    req = ['2454', '3529', '2330', '5274', '2303']
+    close, *_ = S.fetch_panel_data(req, days=60, end_date='2026-10-02')
+    listed = ['2303', '2330', '2454'] if vendor_sorts else ['2454', '2330', '2303']
+    otc = ['3529', '5274']
+    assert list(close.columns) == listed + otc
+
+
+# ── HTML 後援路徑也要有股池關卡 ─────────────────────────────────
+HTML_WITH_UNIVERSE = (
+    '<head>' + DQ.universe_meta_tag(['3443', '3529', '6505']) + '</head>\n'
+    + ROW.format(c='3529O', p='3305.0', status='🟢 建議買進 #1', tp='3800.7', sl='3040.6')
+    + ROW.format(c='3443', p='8040.0', status='🟢 建議買進 #2', tp='9246.0', sl='7396.8')
+)
+
+
+def test_report_universe_roundtrip():
+    assert DQ.report_universe(HTML_WITH_UNIVERSE) == ['3443', '3529', '6505']
+    assert DQ.report_universe('<html></html>') is None
+
+
+def test_paper_trade_html_rejects_ticker_outside_embedded_universe(capsys):
+    import paper_trade
+    rows = paper_trade.extract_signal_rows(HTML_WITH_UNIVERSE)
+    assert [r[0] for r in rows] == ['3443']
+    assert '3529O' in capsys.readouterr().out
+
+
+def test_paper_tracker_html_rejects_ticker_outside_embedded_universe(tmp_path, monkeypatch, capsys):
+    import paper_tracker
+    monkeypatch.chdir(tmp_path)
+    open('stock_report.html', 'w', encoding='utf-8').write(HTML_WITH_UNIVERSE)
+    sigs = paper_tracker.extract_signals_from_report()
+    assert [s['ticker'] for s in sigs] == ['3443']
+    assert '3529O' in capsys.readouterr().out
+
+
+# ── 重算訂單 workflow 的策略參數必須與正式 workflow 完全一致 ──────────
+def _ai_report_args(run):
+    import re
+    import shlex
+    cmd = run.split('python ai_report.py', 1)[1]
+    lines = []
+    for line in cmd.splitlines():
+        lines.append(line)
+        if not line.rstrip().endswith('\\'):
+            break
+    cmd = ' '.join(l.rstrip().rstrip('\\') for l in lines)
+    cmd = re.sub(r'\$\{\{.*?\}\}', '', cmd)
+    toks = shlex.split(cmd)
+    out, skip = [], False
+    for t in toks:
+        if skip:
+            skip = False
+            continue
+        if t == '--end-date':
+            skip = True
+            continue
+        if t == '--allow-stale':
+            continue
+        out.append(t)
+    return out
+
+
+def test_regenerate_workflow_uses_same_strategy_args():
+    import yaml
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.github', 'workflows')
+    main = yaml.safe_load(open(os.path.join(base, 'update_ai_report.yml'), encoding='utf-8'))
+    regen = yaml.safe_load(open(os.path.join(base, 'regenerate_orders.yml'), encoding='utf-8'))
+    main_steps = {s['name']: s for s in main['jobs']['generate-report']['steps'] if 'name' in s}
+    regen_steps = {s['name']: s for s in regen['jobs']['regenerate']['steps'] if 'name' in s}
+    pairs = [('GUARD report (mom_guard)', 'GUARD (mom_guard)'),
+             ('SURGE PRO report (mom_surge_pro) — 最後跑，paper 追蹤此策略', 'SURGE PRO (mom_surge_pro)')]
+    for m, r in pairs:
+        assert _ai_report_args(main_steps[m]['run']) == _ai_report_args(regen_steps[r]['run']), (m, r)
+    assert '--end-date' in regen_steps['GUARD (mom_guard)']['run']
+    assert regen['permissions'] == {'contents': 'read'}          # 不可 push
+    assert 'git push' not in open(os.path.join(base, 'regenerate_orders.yml'), encoding='utf-8').read()

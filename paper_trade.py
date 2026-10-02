@@ -43,7 +43,7 @@ from strategy.risk_metrics import (
 )
 from strategy.portfolio_vol_target import PortfolioVolatilityTarget, VolTargetConfig
 from strategy.core_holdings import CoreHoldingsManager, get_default_core
-from strategy.data_quality import alert, reconcile_parsed_signals
+from strategy.data_quality import alert, filter_codes_by_report_universe, reconcile_parsed_signals
 
 TRADE_LOG = 'paper_trades.json'
 SIGNAL_LOG = 'paper_signals.json'
@@ -147,7 +147,7 @@ def extract_signal_rows(html):
     if matches:
         # 對帳：HTML 中標為「建議買進」的列，必須全部被解析到，否則發警告
         reconcile_parsed_signals(html, [m[0] for m in matches])
-        return matches
+        return filter_codes_by_report_universe(html, matches, code_of=lambda m: m[0])
 
     legacy_pattern = (
         r'<td>(\d{4})</td>\s*<td[^>]*>[^<]*</td>\s*'
@@ -158,7 +158,7 @@ def extract_signal_rows(html):
     legacy = [(ticker, entry, tp, sl, '-') for ticker, entry, tp, sl
               in re.findall(legacy_pattern, html)]
     reconcile_parsed_signals(html, [m[0] for m in legacy])
-    return legacy
+    return filter_codes_by_report_universe(html, legacy, code_of=lambda m: m[0])
 
 
 def generate_signals(args):

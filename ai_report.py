@@ -39,7 +39,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from strategy.ai_strategy import fetch_panel_data, engineer_features, build_liquid_universe
-from strategy.data_quality import alert, check_data_freshness, is_valid_tw_code
+from strategy.data_quality import alert, check_data_freshness, is_valid_tw_code, universe_meta_tag
 from strategy.event_backtest import EventDrivenBacktester
 from strategy.evaluation import slice_evaluation_window
 from strategy.risk_metrics import compute_risk_metrics, format_metrics_summary
@@ -1032,10 +1032,13 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     if config.get('trailing_stop', False):
         mode_html += f" +Trailing({config.get('trailing_atr_mult', 2.0)}×ATR)"
 
+    universe_meta = universe_meta_tag(allowed_tickers) if allowed_tickers is not None else ''
+
     html = f"""<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="utf-8">
+    {universe_meta}
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 台股量化交易 {strategy_label} — {report_date}</title>
     <meta name="description" content="AI 驅動的台股量化交易系統 {strategy_label}，完整風險報告、Benchmark 對比與交易計畫">

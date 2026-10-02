@@ -35,7 +35,8 @@ from strategy.portfolio_vol_target import (
 from strategy.risk_metrics import compute_tiered_risk_summary, format_tiered_risk_summary
 from strategy.core_holdings import CoreHoldingsManager
 from strategy.data_quality import (
-    alert, filter_orders_by_universe, is_valid_tw_code, reconcile_parsed_signals,
+    alert, filter_codes_by_report_universe, filter_orders_by_universe, is_valid_tw_code,
+    reconcile_parsed_signals,
 )
 
 DATA_FILE = 'paper_equity.json'
@@ -380,7 +381,8 @@ def extract_signals_from_report(run_day=None):
                 'max_hold_days': 20,
             })
     reconcile_parsed_signals(html, [s['ticker'] for s in signals], source=report_path)
-    return signals
+    return filter_codes_by_report_universe(html, signals, code_of=lambda s: s['ticker'],
+                                           source=report_path)
 
 def _latest_market_date(reference='0050'):
     """回傳 yfinance 最新可得的交易日（用參考標的探測），失敗回 None。"""

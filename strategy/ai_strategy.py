@@ -90,7 +90,8 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
                 f"行情欄位出現未請求的代號 {unknown}（欄位: {field}）。"
                 f"代號正規化有誤，拒絕繼續以免產生不存在的標的。"
             )
-        return extracted
+        # groupby 會把欄位按字母排序 → 先還原成請求順序（最終順序在下方統一決定）
+        return extracted[[t for t in tickers if t in extracted.columns]]
 
     def _download_symbols(symbols):
         downloaded = []
@@ -135,13 +136,26 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
         if two_dfs:
             df = pd.concat([df] + two_dfs, axis=1)
 
+    # 欄位順序 = 「下載回來的原始順序」：.TW 各批次的欄位在前，.TWO 補抓的上櫃股在後。
+    # 這正是 2026-05-26 以來實際上線的順序（當時上櫃股以 '3529O' 之名附加在最後）。
+    # 回測分數高度量化、常有多檔同分，同分時依欄位順序決定進場；
+    # 沿用同一順序，修正代號 bug 時才不會順便改變選股結果。
+    two_set = set(missing_tickers)
+    symbols = list(dict.fromkeys(df.columns.get_level_values(1)))
+    tw_order = [normalize_tw_symbol(x) for x in symbols if str(x).endswith('.TW')]
+    two_order = [normalize_tw_symbol(x) for x in symbols if str(x).endswith('.TWO')]
+    col_order = list(dict.fromkeys(
+        [t for t in tw_order if t not in two_set] + two_order
+        + [t for t in tickers if t not in two_set]   # 保底：理論上已全部涵蓋
+    ))
+
     raw = {}
     for col in ['Close', 'Open', 'High', 'Low', 'Volume']:
         temp_df = _extract_field(df, col)
         if temp_df.empty:
             alert(f"行情欄位 {col} 不存在，跳過")
             continue
-        raw[col] = temp_df
+        raw[col] = temp_df[[t for t in col_order if t in temp_df.columns]]
 
     if 'Close' not in raw:
         raise RuntimeError("下載結果沒有 Close 欄位")

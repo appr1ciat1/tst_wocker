@@ -176,6 +176,19 @@ jobs:
         if: github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.is_trading == 'true'
         run: python build_paper_page.py
 
+      # 失敗時在 run 摘要頁寫出判讀與處置步驟（新鮮度關卡、訂單驗證等都會讓 run 失敗）
+      - name: Failure guide
+        if: failure() && github.event.schedule != '0 10 1 * *'
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'MD'
+          ## ❌ 今日報表與訂單未產生（舊訂單與網站維持前一版）
+          先看上方 Annotations 的 ❌ 訊息：
+          - **行情最新日期落後於應有的交易日**：(1) 臨時休市（颱風等，XTAI 不知道）→ 不需處理；
+            (2) Yahoo 尚未更新 → 稍後 Re-run，或 Run workflow 並把 `allow_stale` 設為 `true`。
+          - **訂單驗證失敗 / 行情欄位出現未請求的代號**：程式或資料源異常，**不要**用 allow_stale 繞過，請回報。
+          MD
+          echo "::error::今日報表未產生，處置方式見 run 摘要頁（Summary）"
+
       # 稽核軌跡：orders/metadata/signals 被 .gitignore 排除、只存在 runner 上，
       # 事後無從查證。上傳成 Actions artifact（失敗時也上傳，便於追查）。
       - name: Upload order artifacts (audit trail)

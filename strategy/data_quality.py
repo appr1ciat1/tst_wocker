@@ -67,6 +67,38 @@ def report_buy_row_codes(html):
     return [code.strip() for code, body in _BUY_ROW_RE.findall(html) if '建議買進' in body]
 
 
+_UNIVERSE_META_RE = re.compile(r'<meta name="tw-universe" content="([^"]*)"')
+
+
+def universe_meta_tag(universe):
+    """把股池寫進報表 <head>，給只讀 HTML 的下游（paper_trade / paper_tracker 後援）比對用。"""
+    codes = ','.join(sorted({str(t) for t in universe}))
+    return f'<meta name="tw-universe" content="{codes}">'
+
+
+def report_universe(html):
+    """讀出報表內嵌的股池；舊報表沒有此標籤時回傳 None。"""
+    m = _UNIVERSE_META_RE.search(html or '')
+    if not m:
+        return None
+    return [c for c in m.group(1).split(',') if c]
+
+
+def filter_codes_by_report_universe(html, items, code_of=lambda x: x, source='stock_report.html'):
+    """HTML 後援路徑的股池關卡：拒收不在報表內嵌股池中的代號。舊報表（無股池）不過濾但會提示。"""
+    universe = report_universe(html)
+    if universe is None:
+        alert(f"{source} 沒有內嵌股池（舊版報表），無法比對代號是否存在", level='notice')
+        return list(items)
+    allowed = set(universe)
+    kept = [x for x in items if str(code_of(x)) in allowed]
+    rejected = [str(code_of(x)) for x in items if str(code_of(x)) not in allowed]
+    if rejected:
+        alert(f"{source} 有 {len(rejected)} 筆買進訊號代號不在股池內，已拒收: "
+              f"{', '.join(rejected)}", level='error')
+    return kept
+
+
 def reconcile_parsed_signals(html, parsed_codes, source='stock_report.html'):
     """比對 HTML 中的買進列與實際解析成功的代號；不一致就發警告。回傳漏掉的代號。"""
     expected = report_buy_row_codes(html)
