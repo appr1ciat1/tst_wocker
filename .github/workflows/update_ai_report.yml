@@ -164,6 +164,20 @@ jobs:
         if: github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.is_trading == 'true'
         run: python build_paper_page.py
 
+      # 稽核軌跡：orders/metadata/signals 被 .gitignore 排除、只存在 runner 上，
+      # 事後無從查證。上傳成 Actions artifact（失敗時也上傳，便於追查）。
+      - name: Upload order artifacts (audit trail)
+        if: always() && github.event.schedule != '0 10 1 * *'
+        uses: actions/upload-artifact@v4
+        with:
+          name: orders-${{ github.run_id }}
+          path: |
+            artifacts/orders_*.json
+            artifacts/metadata_*.json
+            artifacts/signals_*.csv
+          if-no-files-found: warn
+          retention-days: 90
+
       - name: Monthly Paper Trading Report
         if: github.event.schedule == '0 10 1 * *'
         run: python paper_trade.py monthly

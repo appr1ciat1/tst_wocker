@@ -151,6 +151,28 @@ def get_next_n_trading_days(from_date, n_days):
     return approx_date.strftime('%Y-%m-%d')
 
 
+def validate_orders(orders, allowed_tickers, high_df=None, low_df=None, latest_date=None):
+    """訂單出廠前的最後一道關卡。發現問題直接 raise，讓 CI 失敗、不推送、不靜默。
+
+    - 代號必須屬於本次請求的股池（擋下 '3529O' 這類正規化錯誤產生的假代號）
+    - 訊號日當天必須有真實的 High/Low（擋下 ffill 補出來的假 bar）
+    """
+    allowed = {str(t) for t in allowed_tickers} if allowed_tickers is not None else None
+    problems = []
+    for o in orders:
+        t = str(o.get('ticker'))
+        if allowed is not None and t not in allowed:
+            problems.append(f"{t}: 不在股池內（不存在或代號被改寫）")
+        if latest_date is not None and high_df is not None and low_df is not None:
+            h = high_df[t].get(latest_date) if t in high_df.columns else np.nan
+            l = low_df[t].get(latest_date) if t in low_df.columns else np.nan
+            if pd.isna(h) or pd.isna(l):
+                problems.append(f"{t}: {pd.Timestamp(latest_date).date()} 無真實 High/Low（疑似假 bar 或停牌）")
+    if problems:
+        raise RuntimeError("訂單驗證失敗，拒絕輸出 orders：\n  - " + "\n  - ".join(problems))
+    return orders
+
+
 def _build_inst_section():
     """建立法人籌碼互動 section。
 
@@ -226,7 +248,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
                     metrics, benchmark_equity=None, ew_equity=None,
                     benchmark2_equity=None,
                     high_df=None, low_df=None, show_inst=True,
-                    tiered_scales_log=None):
+                    tiered_scales_log=None, allowed_tickers=None):
     """
     產出 AI 交易計畫 HTML 報表與資金曲線圖（v2 完整版）。
 
@@ -505,6 +527,10 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
                 'time_exit': time_exit,
                 'model_version': strategy_version,
             })
+
+    # 訂單出廠關卡：假代號 / 假 bar 一律中止，不再靜默輸出
+    validate_orders(orders, allowed_tickers, high_df=high_df, low_df=low_df,
+                    latest_date=latest_date)
 
     # 顯示未被選入的候選（排名 > Top-K）
     for ticker, score, price in not_selected[:5]:
@@ -2148,7 +2174,8 @@ def main():
                     benchmark2_equity=benchmark2_equity,
                     high_df=high_df, low_df=low_df,
                     show_inst=args.show_inst,
-                    tiered_scales_log=tiered_scales_log)
+                    tiered_scales_log=tiered_scales_log,
+                    allowed_tickers=tickers)
     print("\n🚀 全部完成！請打開 stock_report.html 查看結果。")
 
 

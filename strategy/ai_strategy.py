@@ -11,6 +11,7 @@ Production scoring: rank_momentum × 3 + rank_trend × 1
 
 STRATEGY_VERSION = "v8.5"
 
+import re
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -18,6 +19,35 @@ from datetime import datetime, timedelta
 import warnings
 
 warnings.filterwarnings('ignore')
+
+_TW_SUFFIX_RE = re.compile(r'\.(TWO|TW)$')
+
+# 一個交易日的「有效 bar」比例（Close 非空且 Volume>0 的股票占比）低於此值，
+# 視為資料商的假 bar（休市日、或資料尚未發布卻先出現的空列），整列丟棄。
+MIN_BAR_COVERAGE = 0.5
+
+
+def normalize_tw_symbol(symbol):
+    """'3529.TWO' → '3529'、'2330.TW' → '2330'；只剝除結尾後綴。"""
+    return _TW_SUFFIX_RE.sub('', str(symbol))
+
+
+def drop_phantom_bars(close_raw, vol_raw, min_coverage=MIN_BAR_COVERAGE):
+    """回傳應保留的日期 index 與被丟棄的日期清單。
+
+    判定：當日 Close 非空且 Volume>0 的股票比例 < min_coverage。
+    在 ffill 之前判定，避免 Close 被前一日值補上後偽裝成新的一天。
+    """
+    if close_raw.empty:
+        return close_raw.index, []
+    valid = close_raw.notna()
+    if vol_raw is not None and not vol_raw.empty:
+        vol_aligned = vol_raw.reindex(index=close_raw.index, columns=close_raw.columns)
+        valid &= vol_aligned.fillna(0) > 0
+    n_cols = max(int(close_raw.notna().any().sum()), 1)
+    coverage = valid.sum(axis=1) / n_cols
+    bad = coverage < min_coverage
+    return close_raw.index[~bad], list(close_raw.index[bad])
 
 
 def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
@@ -69,12 +99,18 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
         else:
             return pd.DataFrame(index=raw_df.index)
         extracted = extracted.copy()
-        extracted.columns = [
-            str(c).replace('.TW', '').replace('.TWO', '')
-            for c in extracted.columns
-        ]
+        # 只剝除「結尾」的 .TWO / .TW。舊寫法 replace('.TW','').replace('.TWO','')
+        # 會先把 '3529.TWO' 的 '.TW' 拿掉 → '3529O'，產生不存在的代號（2026-05-26 起的 bug）。
+        extracted.columns = [normalize_tw_symbol(c) for c in extracted.columns]
         if extracted.columns.duplicated().any():
+            # 同一代號同時有 .TW（空）與 .TWO（有值）欄 → 逐日取第一個非空值合併
             extracted = extracted.T.groupby(level=0).first().T
+        unknown = sorted(set(extracted.columns) - set(map(str, tickers)))
+        if unknown:
+            raise ValueError(
+                f"行情欄位出現未請求的代號 {unknown}（欄位: {field}）。"
+                f"代號正規化有誤，拒絕繼續以免產生不存在的標的。"
+            )
         return extracted
 
     def _download_symbols(symbols):
@@ -112,13 +148,31 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
         if two_dfs:
             df = pd.concat([df] + two_dfs, axis=1)
 
-    data = {}
+    raw = {}
     for col in ['Close', 'Open', 'High', 'Low', 'Volume']:
         temp_df = _extract_field(df, col)
         if temp_df.empty:
             print(f"   ⚠️ 欄位 {col} 不存在，跳過")
             continue
+        raw[col] = temp_df
 
+    if 'Close' not in raw:
+        raise RuntimeError("下載結果沒有 Close 欄位")
+
+    still_missing = [t for t in tickers
+                     if t not in raw['Close'].columns or raw['Close'][t].dropna().empty]
+    if still_missing:
+        print(f"   ⚠️ .TW/.TWO 皆無資料（將不參與選股）: {', '.join(map(str, still_missing))}")
+
+    # 丟棄假 bar：在 ffill 之前判定，否則 Close 會被前一日補值、偽裝成新的一天
+    keep_idx, dropped = drop_phantom_bars(raw['Close'], raw.get('Volume'))
+    if dropped:
+        print(f"   ⚠️ 丟棄 {len(dropped)} 個無有效行情的日期（休市或資料未發布）: "
+              f"{', '.join(d.strftime('%Y-%m-%d') for d in dropped[-10:])}")
+
+    data = {}
+    for col, temp_df in raw.items():
+        temp_df = temp_df.loc[temp_df.index.isin(keep_idx)]
         # Keep tradable bars raw. Forward-filling Open/High/Low/Volume creates
         # fake fills and fake liquidity on missing or suspended days. Close is
         # only used as an indicator/marking input here, so allow a one-day carry
