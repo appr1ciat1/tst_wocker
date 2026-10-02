@@ -11,43 +11,21 @@ Production scoring: rank_momentum × 3 + rank_trend × 1
 
 STRATEGY_VERSION = "v8.5"
 
-import re
 import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import warnings
 
-warnings.filterwarnings('ignore')
+from strategy.data_quality import (  # noqa: F401  (re-export 供舊程式 import)
+    MIN_BAR_COVERAGE,
+    alert,
+    drop_phantom_bars,
+    normalize_tw_symbol,
+    quiet_routine_warnings,
+)
 
-_TW_SUFFIX_RE = re.compile(r'\.(TWO|TW)$')
-
-# 一個交易日的「有效 bar」比例（Close 非空且 Volume>0 的股票占比）低於此值，
-# 視為資料商的假 bar（休市日、或資料尚未發布卻先出現的空列），整列丟棄。
-MIN_BAR_COVERAGE = 0.5
-
-
-def normalize_tw_symbol(symbol):
-    """'3529.TWO' → '3529'、'2330.TW' → '2330'；只剝除結尾後綴。"""
-    return _TW_SUFFIX_RE.sub('', str(symbol))
-
-
-def drop_phantom_bars(close_raw, vol_raw, min_coverage=MIN_BAR_COVERAGE):
-    """回傳應保留的日期 index 與被丟棄的日期清單。
-
-    判定：當日 Close 非空且 Volume>0 的股票比例 < min_coverage。
-    在 ffill 之前判定，避免 Close 被前一日值補上後偽裝成新的一天。
-    """
-    if close_raw.empty:
-        return close_raw.index, []
-    valid = close_raw.notna()
-    if vol_raw is not None and not vol_raw.empty:
-        vol_aligned = vol_raw.reindex(index=close_raw.index, columns=close_raw.columns)
-        valid &= vol_aligned.fillna(0) > 0
-    n_cols = max(int(close_raw.notna().any().sum()), 1)
-    coverage = valid.sum(axis=1) / n_cols
-    bad = coverage < min_coverage
-    return close_raw.index[~bad], list(close_raw.index[bad])
+# 只靜音例行的 pandas/numpy 雜訊；不再全域 ignore（舊寫法會吞掉所有警告）
+quiet_routine_warnings()
 
 
 def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
@@ -82,6 +60,7 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
         start_dt = end_dt - timedelta(days=days)
         actual_days = days
 
+    tickers = [str(t) for t in tickers]
     print(f"📥 正在批次下載 {len(tickers)} 檔股票的歷史資料 "
           f"({start_dt.strftime('%Y-%m-%d')} → {end_dt.strftime('%Y-%m-%d')}, "
           f"~{actual_days} 天)...")
@@ -122,8 +101,16 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
             total_batches = (len(symbols) + batch_size - 1) // batch_size
             print(f"   📦 下載批次 {batch_num}/{total_batches} ({len(batch)} 檔)...")
             batch_df = yf.download(batch, start=start_dt, end=end_dt, progress=False)
-            if not batch_df.empty:
-                downloaded.append(batch_df)
+            if batch_df is None or batch_df.empty:
+                continue
+            if not isinstance(batch_df.columns, pd.MultiIndex):
+                # 舊版 yfinance 單檔下載回傳單層欄位（'Close'...）；補上代號層，
+                # 否則欄名 'Close' 會被誤當成股票代號。
+                if len(batch) != 1:
+                    raise ValueError(f"yfinance 回傳單層欄位但請求了 {len(batch)} 檔: {batch}")
+                batch_df = batch_df.copy()
+                batch_df.columns = pd.MultiIndex.from_product([batch_df.columns, batch])
+            downloaded.append(batch_df)
         return downloaded
 
     # yfinance 批次下載有大小限制，分批處理
@@ -152,7 +139,7 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
     for col in ['Close', 'Open', 'High', 'Low', 'Volume']:
         temp_df = _extract_field(df, col)
         if temp_df.empty:
-            print(f"   ⚠️ 欄位 {col} 不存在，跳過")
+            alert(f"行情欄位 {col} 不存在，跳過")
             continue
         raw[col] = temp_df
 
@@ -162,12 +149,13 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
     still_missing = [t for t in tickers
                      if t not in raw['Close'].columns or raw['Close'][t].dropna().empty]
     if still_missing:
-        print(f"   ⚠️ .TW/.TWO 皆無資料（將不參與選股）: {', '.join(map(str, still_missing))}")
+        alert(f"{len(still_missing)} 檔 .TW/.TWO 皆無資料，將不參與選股: "
+              f"{', '.join(still_missing)}")
 
     # 丟棄假 bar：在 ffill 之前判定，否則 Close 會被前一日補值、偽裝成新的一天
     keep_idx, dropped = drop_phantom_bars(raw['Close'], raw.get('Volume'))
     if dropped:
-        print(f"   ⚠️ 丟棄 {len(dropped)} 個無有效行情的日期（休市或資料未發布）: "
+        alert(f"丟棄 {len(dropped)} 個無有效行情的日期（休市或資料未發布）: "
               f"{', '.join(d.strftime('%Y-%m-%d') for d in dropped[-10:])}")
 
     data = {}
@@ -306,7 +294,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             residual_mom = stock_cum_20.sub(mkt_cum_20, axis=0)
             print("   \U0001f52c 殘差動量已計算 (market-beta adjusted)")
         except Exception as e:
-            print(f"   ⚠️ 殘差動量計算失敗: {e}")
+            alert(f"殘差動量計算失敗: {e}")
 
     # === 趨勢品質 ===
     tq_score = None
@@ -319,7 +307,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             tq_score = ma60_slope * 100 + ma_alignment * 0.5 + overheat_penalty * 0.3
             print("   \U0001f4d0 趨勢品質已計算")
         except Exception as e:
-            print(f"   ⚠️ 趨勢品質計算失敗: {e}")
+            alert(f"趨勢品質計算失敗: {e}")
 
     # === 流動性穩定度 ===
     liq_stab = None
@@ -386,7 +374,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             rank_rsi = compute_rsi_rank(close_df, period=20, universe_mask=universe_mask)
             print(f"   📈 RSI-20 因子已計算 (weight={rsi_weight})")
         except Exception as e:
-            print(f"   ⚠️ RSI 因子計算失敗: {e}")
+            alert(f"RSI 因子計算失敗: {e}")
 
     if breakout_weight > 0:
         try:
@@ -394,7 +382,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             rank_breakout = compute_breakout_rank(close_df, window=300, universe_mask=universe_mask)
             print(f"   🏔️ Breakout-300 因子已計算 (weight={breakout_weight})")
         except Exception as e:
-            print(f"   ⚠️ Breakout 因子計算失敗: {e}")
+            alert(f"Breakout 因子計算失敗: {e}")
 
     if value_weight > 0:
         try:
@@ -405,7 +393,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             )
             print(f"   💰 Value (PB+PE) 因子已計算 (weight={value_weight})")
         except Exception as e:
-            print(f"   ⚠️ Value 因子計算失敗: {e}")
+            alert(f"Value 因子計算失敗: {e}")
 
     if rev_momentum_weight > 0:
         try:
@@ -413,7 +401,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             rank_rev_mom = compute_revenue_momentum(close_df, period=60, universe_mask=universe_mask)
             print(f"   📊 RevMomentum-60 因子已計算 (weight={rev_momentum_weight})")
         except Exception as e:
-            print(f"   ⚠️ RevMomentum 因子計算失敗: {e}")
+            alert(f"RevMomentum 因子計算失敗: {e}")
 
     # === 因子加權 ===
     if ml_weights:

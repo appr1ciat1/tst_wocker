@@ -14,9 +14,9 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
-import warnings
+from strategy.data_quality import quiet_routine_warnings
 
-warnings.filterwarnings('ignore')
+quiet_routine_warnings()
 
 # ====== 危機期間定義 ======
 CRISIS_PERIODS = {

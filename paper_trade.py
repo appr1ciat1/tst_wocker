@@ -43,6 +43,7 @@ from strategy.risk_metrics import (
 )
 from strategy.portfolio_vol_target import PortfolioVolatilityTarget, VolTargetConfig
 from strategy.core_holdings import CoreHoldingsManager, get_default_core
+from strategy.data_quality import alert, reconcile_parsed_signals
 
 TRADE_LOG = 'paper_trades.json'
 SIGNAL_LOG = 'paper_signals.json'
@@ -116,8 +117,12 @@ def fetch_latest_prices(tickers):
         if missing:
             two_symbols = {t: f"{t}.TWO" for t in missing}
             prices.update(read_prices(two_symbols))
+        still_missing = [t for t in tickers if t not in prices]
+        if still_missing:
+            alert(f"無法取得最新報價（.TW/.TWO 皆無），未實現損益將用成本估算: "
+                  f"{', '.join(still_missing)}")
     except Exception as e:
-        print(f"   ⚠️ 最新價格下載失敗，未實現損益將用成本估算: {e}")
+        alert(f"最新價格下載失敗，未實現損益將用成本估算: {e}")
     return prices
 
 
@@ -125,18 +130,23 @@ def extract_signal_rows(html):
     """從 stock_report.html 擷取買進訊號。"""
     import re
 
+    # _ROW = 「不跨越 </tr> 的任意字元」。舊寫法用 .*?（DOTALL）會從一列一路匹配到
+    # 下一列的「建議買進」，把 A 股的代號配上 B 股的停利停損。
+    _ROW = r'(?:(?!</tr>).)*?'
     current_pattern = (
         r'<tr[^>]*>\s*'
-        r'<td>(\d{4})</td>\s*'
+        r'<td>(\d{4,6}[A-Z]?)</td>\s*'
         r'<td>[\d\.]+</td>\s*'
         r'<td>([\d\.]+)</td>\s*'
-        r'<td>.*?建議買進.*?</td>\s*'
-        r'<td>.*?停利.*?<span[^>]*>([\d\.]+)</span>.*?'
-        r'停損.*?<span[^>]*>([\d\.]+)</span>.*?'
-        r'最晚出場.*?(\d{4}-\d{2}-\d{2})'
+        r'<td>' + _ROW + r'建議買進' + _ROW + r'</td>\s*'
+        r'<td>' + _ROW + r'停利' + _ROW + r'<span[^>]*>([\d\.]+)</span>' + _ROW +
+        r'停損' + _ROW + r'<span[^>]*>([\d\.]+)</span>' + _ROW +
+        r'最晚出場' + _ROW + r'(\d{4}-\d{2}-\d{2})'
     )
     matches = re.findall(current_pattern, html, re.DOTALL)
     if matches:
+        # 對帳：HTML 中標為「建議買進」的列，必須全部被解析到，否則發警告
+        reconcile_parsed_signals(html, [m[0] for m in matches])
         return matches
 
     legacy_pattern = (
@@ -145,8 +155,10 @@ def extract_signal_rows(html):
         r'<td[^>]*>([\d\.]+)</td>\s*'
         r'<td[^>]*>([\d\.]+)</td>'
     )
-    return [(ticker, entry, tp, sl, '-') for ticker, entry, tp, sl
-            in re.findall(legacy_pattern, html)]
+    legacy = [(ticker, entry, tp, sl, '-') for ticker, entry, tp, sl
+              in re.findall(legacy_pattern, html)]
+    reconcile_parsed_signals(html, [m[0] for m in legacy])
+    return legacy
 
 
 def generate_signals(args):

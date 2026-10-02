@@ -159,6 +159,19 @@ def fetch_value_data(tickers, close_df):
     bps_dict = {}  # Book value per share
     eps_dict = {}  # Earnings per share
 
+    from strategy.data_quality import alert, normalize_tw_symbol
+
+    def _info(code):
+        # 上市 .TW 優先；無基本面者改試上櫃 .TWO（舊寫法只試 .TW，上櫃股靜默缺值）
+        for suffix in ('.TW', '.TWO'):
+            try:
+                info = yf.Ticker(f"{code}{suffix}").info or {}
+            except Exception:
+                continue
+            if info.get('bookValue') or info.get('trailingEps'):
+                return info
+        return {}
+
     batch_size = 20
     tw_tickers = [f"{t}.TW" for t in tickers]
 
@@ -166,8 +179,9 @@ def fetch_value_data(tickers, close_df):
         batch = tw_tickers[i:i+batch_size]
         for tw_t in batch:
             try:
-                info = yf.Ticker(tw_t).info
-                t = tw_t.replace('.TW', '')
+                # 只剝除結尾後綴（同 3529O 事故：replace 會誤刪字串中段）
+                t = normalize_tw_symbol(tw_t)
+                info = _info(t)
 
                 # Book Value Per Share → 用來算 PB
                 bvps = info.get('bookValue', None)
@@ -183,6 +197,10 @@ def fetch_value_data(tickers, close_df):
                 continue
 
     print(f"   ✅ 取得 BPS: {len(bps_dict)} 檔, EPS: {len(eps_dict)} 檔")
+    no_fund = [str(t) for t in tickers if str(t) not in bps_dict and str(t) not in eps_dict]
+    if no_fund:
+        alert(f"{len(no_fund)}/{len(tickers)} 檔無 PE/PB 基本面，價值因子對其無作用: "
+              f"{', '.join(no_fund[:20])}{' ...' if len(no_fund) > 20 else ''}")
 
     # 建立歷史 PB/PE DataFrame
     # PB = 每日收盤價 / BPS（假設 BPS 在回測期間穩定）

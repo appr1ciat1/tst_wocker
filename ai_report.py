@@ -39,6 +39,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from strategy.ai_strategy import fetch_panel_data, engineer_features, build_liquid_universe
+from strategy.data_quality import alert, check_data_freshness, is_valid_tw_code
 from strategy.event_backtest import EventDrivenBacktester
 from strategy.evaluation import slice_evaluation_window
 from strategy.risk_metrics import compute_risk_metrics, format_metrics_summary
@@ -159,17 +160,31 @@ def validate_orders(orders, allowed_tickers, high_df=None, low_df=None, latest_d
     """
     allowed = {str(t) for t in allowed_tickers} if allowed_tickers is not None else None
     problems = []
+    seen = set()
     for o in orders:
         t = str(o.get('ticker'))
+        if not is_valid_tw_code(t):
+            problems.append(f"{t}: 代號格式不合法")
         if allowed is not None and t not in allowed:
             problems.append(f"{t}: 不在股池內（不存在或代號被改寫）")
+        if t in seen:
+            problems.append(f"{t}: 重複下單")
+        seen.add(t)
         if latest_date is not None and high_df is not None and low_df is not None:
             h = high_df[t].get(latest_date) if t in high_df.columns else np.nan
             l = low_df[t].get(latest_date) if t in low_df.columns else np.nan
             if pd.isna(h) or pd.isna(l):
                 problems.append(f"{t}: {pd.Timestamp(latest_date).date()} 無真實 High/Low（疑似假 bar 或停牌）")
+        try:
+            ref, tp, sl = (float(o['reference_close']), float(o['tp_price']), float(o['sl_price']))
+            if not (np.isfinite([ref, tp, sl]).all() and tp > ref > sl > 0):
+                problems.append(f"{t}: 價格不合理 ref={ref} tp={tp} sl={sl}")
+        except (KeyError, TypeError, ValueError):
+            pass  # 測試或舊格式訂單可能不含價格欄位
     if problems:
-        raise RuntimeError("訂單驗證失敗，拒絕輸出 orders：\n  - " + "\n  - ".join(problems))
+        msg = "訂單驗證失敗，拒絕輸出 orders：\n  - " + "\n  - ".join(problems)
+        alert(msg, level='error')
+        raise RuntimeError(msg)
     return orders
 
 
@@ -419,12 +434,18 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     news_data = {}
     try:
         inst_data = get_inst_flow_for_signals(all_tickers)
-    except Exception:
+    except Exception as e:
+        alert(f"籌碼資料抓取失敗，報表籌碼欄將顯示「無資料」: {e}")
         inst_data = {}
     try:
         news_data = get_news_sentiment_for_signals(all_tickers)
-    except Exception:
+    except Exception as e:
+        alert(f"新聞情緒抓取失敗，報表新聞欄將顯示「中性」: {e}")
         news_data = {}
+    no_inst = [t for t, _, _ in selected if not inst_data.get(t)]
+    if selected and no_inst:
+        # 籌碼來源涵蓋所有上市櫃股票；入選股查無資料通常代表代號錯誤或資料源異常
+        alert(f"{len(no_inst)}/{len(selected)} 檔入選股查無籌碼資料: {', '.join(no_inst)}")
 
     # 籌碼動態 HTML section
     inst_section_html = _build_inst_section()
@@ -434,13 +455,33 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     for rank, (ticker, score, price) in enumerate(selected, 1):
         order_valid = True
         time_exit = get_next_n_trading_days(latest_date, max_hold_days)
+
+        # 訊號日必須有真實成交 bar（High/Low）。Close 經過 ffill，不能當作依據。
+        # 沒有 → 停牌或資料缺漏：只剔除這一筆，不中止整份報表，但一定要發警告。
+        has_real_bar = True
+        if high_df is not None and low_df is not None:
+            h = high_df[ticker].get(latest_date) if ticker in high_df.columns else np.nan
+            l = low_df[ticker].get(latest_date) if ticker in low_df.columns else np.nan
+            has_real_bar = not (pd.isna(h) or pd.isna(l))
+
         # 使用精確 ATR（與回測引擎同公式）
-        if tp_sl_mode == 'atr':
+        if not has_real_bar:
+            tp_price = sl_price = np.nan
+            plan = '<span style="color:#ff4444">⚠️ 訊號日無成交資料（停牌或缺資料），不下單</span>'
+            order_valid = False
+            alert(f"{ticker} 在 {latest_date.strftime('%Y-%m-%d')} 無真實 High/Low，剔除此筆訂單")
+        elif tp_sl_mode == 'atr':
             high_s = high_df[ticker] if (high_df is not None and ticker in high_df.columns) else None
             low_s = low_df[ticker] if (low_df is not None and ticker in low_df.columns) else None
             atr_val = _compute_display_atr(close_df[ticker], high_s, low_s)
 
-            if not pd.isna(atr_val) and atr_val > 0:
+            if pd.isna(atr_val) or atr_val <= 0:
+                # 舊行為：靜默改用固定 tp_pct/sl_pct，與回測（ATR）不一致且無人知道。
+                tp_price = sl_price = np.nan
+                plan = '<span style="color:#ff4444">⚠️ ATR 無法計算（資料不足），不下單</span>'
+                order_valid = False
+                alert(f"{ticker} ATR 無法計算（{atr_val}），剔除此筆訂單；不再靜默改用固定百分比")
+            else:
                 tp_price = price + atr_val * config.get('tp_atr_mult', 3.0)
                 sl_price = price - atr_val * config.get('sl_atr_mult', 2.0)
                 # Sanity checks
@@ -452,20 +493,13 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
                 if tp_pct_display > 50 or sl_pct_display > 50:
                     plan = '<span style="color:#ff4444">⚠️ ATR 異常，信號無效</span>'
                     order_valid = False
+                    alert(f"{ticker} ATR 異常（停利 +{tp_pct_display:.1f}% / 停損 -{sl_pct_display:.1f}%），剔除此筆訂單")
                 else:
                     plan = (f'<b>停利:</b> <span style="color:#00ff00">{tp_price:.1f}</span>'
                             f' (+{tp_pct_display:.1f}%) '
                             f'<br><b>停損:</b> <span style="color:#ff4444">{sl_price:.1f}</span>'
                             f' (-{sl_pct_display:.1f}%) '
                             f'<br><b>最晚出場:</b> {time_exit}')
-            else:
-                tp_price = price * (1 + tp_pct)
-                sl_price = price * (1 - sl_pct)
-                plan = (f'<b>停利:</b> <span style="color:#00ff00">{tp_price:.1f}</span>'
-                        f' (+{tp_pct*100:.1f}%) '
-                        f'<br><b>停損:</b> <span style="color:#ff4444">{sl_price:.1f}</span>'
-                        f' (-{sl_pct*100:.1f}%) '
-                        f'<br><b>最晚出場:</b> {time_exit}')
         else:
             tp_price = price * (1 + tp_pct)
             sl_price = price * (1 - sl_pct)
@@ -475,7 +509,11 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
                     f' (-{sl_pct*100:.1f}%) '
                     f'<br><b>最晚出場:</b> {time_exit}')
 
-        status = f'<span style="color:#00ff00; font-weight:bold;">🟢 建議買進 #{rank}</span>'
+        if order_valid:
+            status = f'<span style="color:#00ff00; font-weight:bold;">🟢 建議買進 #{rank}</span>'
+        else:
+            # 不可寫「建議買進」：paper 的 HTML 後援解析會把它當成買單
+            status = f'<span style="color:#ff4444; font-weight:bold;">⛔ 已剔除 #{rank}</span>'
 
         # Per-stock 歷史績效
         ss = stock_stats.get(ticker, None)
@@ -1480,8 +1518,18 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     today_signals = today_signals.dropna().sort_values('Score', ascending=False)
     today_signals.to_csv(f'artifacts/signals_{date_str}.csv')
 
+    # universe 寫進訂單檔：下游（paper tracker）可據此拒收不在股池內的代號
+    orders_payload = {
+        'schema_version': 2,
+        'signal_date': latest_date.strftime('%Y-%m-%d'),
+        'generated_at': datetime.now().isoformat(timespec='seconds'),
+        'model_version': strategy_version,
+        'universe': sorted(str(t) for t in allowed_tickers) if allowed_tickers is not None else None,
+        'validated': True,
+        'orders': orders,
+    }
     with open(f'artifacts/orders_{date_str}.json', 'w', encoding='utf-8') as f:
-        json.dump({'orders': orders}, f, indent=2, ensure_ascii=False)
+        json.dump(orders_payload, f, indent=2, ensure_ascii=False)
 
     try:
         git_sha = subprocess.check_output(
@@ -1935,6 +1983,12 @@ def parse_args():
         help='60日營收動能代理因子權重 (預設 0 = 停用; FinLab MEMORY.md 鐵律)'
     )
 
+    parser.add_argument(
+        '--allow-stale', action='store_true',
+        help='允許行情最新日期落後於「應已收盤的最新交易日」（研究用）。'
+             '預設在未指定 --end-date 時，資料過期會直接中止，避免用舊價格產生訂單。'
+    )
+
     return parser.parse_args()
 
 
@@ -1979,6 +2033,24 @@ def main():
         tickers, days=args.days,
         start_date=args.start_date, end_date=args.end_date,
     )
+
+    # Phase 1.5: 資料新鮮度關卡（只在「出今日訂單」模式，即未指定 --end-date 時）
+    # XTAI 行事曆不知道颱風等臨時休市；資料商也可能尚未發布當日資料。
+    # 兩種情況都會讓最新 bar 落後，舊流程照樣用舊價格出單且毫無警訊。
+    if args.end_date is None:
+        latest_bar = close_df.index[-1]
+        is_fresh, expected = check_data_freshness(latest_bar)
+        if not is_fresh:
+            msg = (f"行情最新日期 {latest_bar.strftime('%Y-%m-%d')} 落後於應有的交易日 "
+                   f"{expected.strftime('%Y-%m-%d')}（臨時休市或資料尚未發布）。")
+            if args.allow_stale:
+                alert(msg + " --allow-stale 已指定，繼續執行。")
+            else:
+                alert(msg + " 中止，不產生訂單。確認後可加 --allow-stale 強制執行。", level='error')
+                sys.exit(2)
+        elif expected is not None:
+            print(f"   ✅ 資料新鮮度：最新 bar {latest_bar.strftime('%Y-%m-%d')}，"
+                  f"應有交易日 {expected.strftime('%Y-%m-%d')}")
 
     # Phase 2: 動態 Universe 或靜態池
     if use_dynamic:

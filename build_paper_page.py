@@ -19,6 +19,7 @@ from datetime import date
 import pandas as pd
 
 from inst_widget import build_inst_widget
+from strategy.data_quality import alert, filter_orders_by_universe, is_valid_tw_code, normalize_tw_symbol
 from strategies.registry import get_strategy
 from strategies.base import ExecConfig
 from twstk.backtest.engine import RunConfig, build_market_data
@@ -68,14 +69,23 @@ def _stock_link(ticker):
     if ticker is None or str(ticker).strip() in ("", "None", "-"):
         return "-"
     raw = str(ticker)
-    code = raw.split(".")[0]
+    code = normalize_tw_symbol(raw)
+    if not is_valid_tw_code(code):
+        alert(f"Paper 頁出現格式不合法的代號，不產生連結: {raw}", level='error')
+        return f"<span style='color:#f87171'>⚠️ {raw}</span>"
     name, market = _stock_meta().get(code, ("", ""))
     if raw.endswith(".TWO"):
         suf = ".TWO"
     elif raw.endswith(".TW"):
         suf = ".TW"
+    elif market.upper() in ("TPEX", "OTC", "TWO", "櫃買", "上櫃"):
+        suf = ".TWO"
+    elif market:
+        suf = ".TW"
     else:
-        suf = ".TWO" if market.upper() in ("TPEX", "OTC", "TWO", "櫃買", "上櫃") else ".TW"
+        # 市場未知（法人快照抓取失敗）：不猜 .TW。Yahoo 台股接受純代號並自動導向
+        # 正確市場（例：/quote/3529 → 3529.TWO）；猜 .TW 會讓上櫃股變成死連結。
+        suf = ""
     url = f"https://tw.stock.yahoo.com/quote/{code}{suf}"
     label = f"{code}{('&nbsp;' + name) if name else ''}"
     return f"<a href='{url}' target='_blank' rel='noopener'>{label}</a>"
@@ -355,10 +365,13 @@ def today_signals(orders_glob="artifacts/orders_2*.json"):
     latest = files[-1]
     try:
         payload = json.load(open(latest, encoding="utf-8"))
-    except Exception:
+    except Exception as e:
+        alert(f"orders 檔讀取失敗，Paper 頁將顯示無訊號: {latest}: {e}", level='error')
         return latest, []
     sigs = []
-    for o in payload.get("orders", []):
+    orders = filter_orders_by_universe(payload.get("orders", []), payload.get("universe"),
+                                       source=os.path.basename(latest))
+    for o in orders:
         if o.get("side") != "buy":
             continue
         sigs.append({
