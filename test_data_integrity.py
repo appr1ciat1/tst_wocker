@@ -30,7 +30,7 @@ def _utc(s):
 
 
 def _fake_download_factory(phantom_last=None, holiday=None, single_level=False):
-    """phantom_last: None | 'nan' (整列 NaN) | 'zero_vol' (價格 NaN、Volume=0)"""
+    """phantom_last: None | 'nan' (整列 NaN) | 'zero_vol' (價格 NaN、Volume=0) | 'no_hl' (High/Low 缺)"""
     def fake_download(symbols, start=None, end=None, progress=False, **kw):
         symbols = [symbols] if isinstance(symbols, str) else list(symbols)
         cols = pd.MultiIndex.from_product([['Close', 'Open', 'High', 'Low', 'Volume'], symbols])
@@ -45,6 +45,10 @@ def _fake_download_factory(phantom_last=None, holiday=None, single_level=False):
                 continue
             if mode == 'nan':
                 df.loc[when] = np.nan
+            elif mode == 'no_hl':                   # 6/22、8/31 型：Close/Volume 有值、High/Low 缺
+                for field, sym in df.columns:
+                    if field in ('High', 'Low'):
+                        df.loc[when, (field, sym)] = np.nan
             else:
                 for field, sym in df.columns:
                     df.loc[when, (field, sym)] = 0.0 if field == 'Volume' else np.nan
@@ -120,7 +124,7 @@ def test_missing_everywhere_alerts(monkeypatch, capsys):
 
 
 # ── #2 假 bar ────────────────────────────────────────────────────
-@pytest.mark.parametrize('mode', ['nan', 'zero_vol'])
+@pytest.mark.parametrize('mode', ['nan', 'zero_vol', 'no_hl'])
 def test_phantom_last_bar_is_dropped(patch_yf, mode):
     patch_yf(phantom_last=mode)
     close, open_, high, low, vol = S.fetch_panel_data(TICKERS, days=60, end_date='2026-10-02')
@@ -421,3 +425,44 @@ def test_regenerate_workflow_uses_same_strategy_args():
     assert '--end-date' in regen_steps['GUARD (mom_guard)']['run']
     assert regen['permissions'] == {'contents': 'read'}          # 不可 push
     assert 'git push' not in open(os.path.join(base, 'regenerate_orders.yml'), encoding='utf-8').read()
+
+
+# ── 盤中執行：當日 bar 未收盤，不可使用（上線紀錄 2026-05-26 10:28 曾發生）────
+@pytest.mark.parametrize('now, closed', [
+    ('2026-05-26T02:28:00', False),   # 台灣 10:28 盤中
+    ('2026-05-26T05:34:00', False),   # 13:34 尚未過緩衝
+    ('2026-05-26T05:35:00', True),    # 13:35
+    ('2026-05-26T09:17:00', True),    # 排程時間
+])
+def test_is_session_closed(now, closed):
+    assert DQ.is_session_closed(pd.Timestamp('2026-05-26'), _utc(now)) is closed
+
+
+# ── 依上線紀錄歸納的資料商異常型態（2026-04 ~ 10）──────────────────
+def _panel(n=30, k=10):
+    idx = pd.bdate_range('2026-08-03', periods=n)
+    rng = np.random.default_rng(1)
+    c = pd.DataFrame(100 + rng.normal(0, 1, (n, k)).cumsum(0), index=idx, columns=[f'{2300+i}' for i in range(k)])
+    return c, c + 1, c - 1, c * 0 + 1e6
+
+
+@pytest.mark.parametrize('pattern', ['blank', 'no_hl', 'flat_copy_with_volume', 'flat_copy_zero_volume'])
+def test_live_incident_patterns_are_dropped(pattern):
+    c, h, l, v = _panel()
+    d = c.index[-1]
+    if pattern == 'blank':                      # 10/01、7/02：整列空白
+        for df in (c, h, l, v): df.loc[d] = np.nan
+    elif pattern == 'no_hl':                    # 6/22、8/31：Close 有值、High/Low 缺
+        h.loc[d] = np.nan; l.loc[d] = np.nan
+    else:                                       # 7/10 颱風休市：複製前收的平盤 bar
+        prev = c.iloc[-2]
+        c.loc[d] = prev; h.loc[d] = prev; l.loc[d] = prev
+        if pattern == 'flat_copy_zero_volume': v.loc[d] = 0
+    keep, dropped = DQ.drop_phantom_bars(c, v, h, l)
+    assert dropped == [d] and keep[-1] == c.index[-2]
+
+
+def test_normal_panel_keeps_every_day():
+    c, h, l, v = _panel()
+    keep, dropped = DQ.drop_phantom_bars(c, v, h, l)
+    assert dropped == [] and len(keep) == len(c)

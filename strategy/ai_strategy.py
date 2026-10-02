@@ -167,7 +167,8 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
               f"{', '.join(still_missing)}")
 
     # 丟棄假 bar：在 ffill 之前判定，否則 Close 會被前一日補值、偽裝成新的一天
-    keep_idx, dropped = drop_phantom_bars(raw['Close'], raw.get('Volume'))
+    keep_idx, dropped = drop_phantom_bars(raw['Close'], raw.get('Volume'),
+                                          raw.get('High'), raw.get('Low'))
     if dropped:
         alert(f"丟棄 {len(dropped)} 個無有效行情的日期（休市或資料未發布）: "
               f"{', '.join(d.strftime('%Y-%m-%d') for d in dropped[-10:])}")

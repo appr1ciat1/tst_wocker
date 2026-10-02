@@ -126,18 +126,37 @@ def filter_orders_by_universe(orders, universe, source='orders'):
     return kept
 
 
-def drop_phantom_bars(close_raw, vol_raw=None, min_coverage=MIN_BAR_COVERAGE):
+def bar_validity(close_raw, vol_raw=None, high_raw=None, low_raw=None):
+    """每檔每日是否為「真實成交 bar」（布林矩陣）。必須在 ffill 之前判定。
+
+    無效條件（依 2026-04~10 上線紀錄中實際出現過的資料商異常歸納）：
+    - Close 缺值（10/01、7/02 等：最新一列整列空白，舊程式 ffill 後偽裝成新的一天）
+    - High 或 Low 缺值（6/22、8/31 等：Close 有值但 High/Low 缺，ATR 失效）
+    - Volume 缺值或 <= 0（休市日的空 bar）
+    - 平盤且與前一日收盤相同、且無振幅（H == L == C == 前收；7/10 颱風休市時的複製 bar）
+    """
+    valid = close_raw.notna()
+    align = lambda df: df.reindex(index=close_raw.index, columns=close_raw.columns)
+    if vol_raw is not None and not vol_raw.empty:
+        valid &= align(vol_raw).fillna(0) > 0
+    if high_raw is not None and not high_raw.empty and low_raw is not None and not low_raw.empty:
+        h, l = align(high_raw), align(low_raw)
+        valid &= h.notna() & l.notna()
+        flat_copy = (h == l) & (l == close_raw) & (close_raw == close_raw.shift(1))
+        valid &= ~flat_copy
+    return valid
+
+
+def drop_phantom_bars(close_raw, vol_raw=None, high_raw=None, low_raw=None,
+                      min_coverage=MIN_BAR_COVERAGE):
     """回傳 (保留的日期 index, 被丟棄的日期 list)。
 
-    判定：當日 Close 非空且 Volume>0 的股票數 / 有資料的股票數 < min_coverage。
+    判定：當日「真實成交 bar」（見 bar_validity）的股票數 / 有資料的股票數 < min_coverage。
     必須在 ffill 之前判定，否則 Close 會被前一日值補上而偽裝成新的一天。
     """
     if close_raw.empty:
         return close_raw.index, []
-    valid = close_raw.notna()
-    if vol_raw is not None and not vol_raw.empty:
-        vol_aligned = vol_raw.reindex(index=close_raw.index, columns=close_raw.columns)
-        valid &= vol_aligned.fillna(0) > 0
+    valid = bar_validity(close_raw, vol_raw, high_raw, low_raw)
     n_cols = max(int(close_raw.notna().any().sum()), 1)
     coverage = valid.sum(axis=1) / n_cols
     bad = coverage < min_coverage
@@ -184,6 +203,19 @@ def expected_latest_session(now_utc=None, calendar=None, ready_hour_utc=DATA_REA
         if s + pd.Timedelta(hours=ready_hour_utc) <= pd.Timestamp(now_utc):
             return s.normalize()
     return None
+
+
+# 台股 13:30 收盤；留 5 分鐘緩衝。早於此時刻，當日 bar 是盤中未完成的資料。
+SESSION_CLOSE_UTC_HOUR = 5 + 35 / 60
+
+
+def is_session_closed(bar_date, now_utc=None):
+    """bar_date 這一天的盤是否已收（台灣 13:35 之後）。盤中執行時，當日 bar 只是部分資料。"""
+    now_utc = now_utc or datetime.now(timezone.utc)
+    if now_utc.tzinfo is not None:
+        now_utc = now_utc.astimezone(timezone.utc).replace(tzinfo=None)
+    close_at = pd.Timestamp(bar_date).normalize() + pd.Timedelta(hours=SESSION_CLOSE_UTC_HOUR)
+    return pd.Timestamp(now_utc) >= close_at
 
 
 def report_reference_date(now_utc=None):

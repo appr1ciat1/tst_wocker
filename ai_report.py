@@ -39,7 +39,9 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from strategy.ai_strategy import fetch_panel_data, engineer_features, build_liquid_universe
-from strategy.data_quality import alert, check_data_freshness, is_valid_tw_code, universe_meta_tag
+from strategy.data_quality import (
+    alert, check_data_freshness, is_session_closed, is_valid_tw_code, universe_meta_tag,
+)
 from strategy.event_backtest import EventDrivenBacktester
 from strategy.evaluation import slice_evaluation_window
 from strategy.risk_metrics import compute_risk_metrics, format_metrics_summary
@@ -2042,6 +2044,15 @@ def main():
     # 兩種情況都會讓最新 bar 落後，舊流程照樣用舊價格出單且毫無警訊。
     if args.end_date is None:
         latest_bar = close_df.index[-1]
+        # 盤中執行（台灣 13:35 前）時，當日 bar 只是盤中部分資料 → 不使用，改以前一交易日為準。
+        # 上線紀錄：2026-05-26 10:28 的執行就用盤中價格產生了當日訊號。
+        if not is_session_closed(latest_bar):
+            alert(f"{latest_bar.strftime('%Y-%m-%d')} 尚未收盤，該日 bar 為盤中資料，已排除；"
+                  f"本次以前一交易日的完整資料產生報表")
+            keep = close_df.index < latest_bar
+            close_df, open_df, high_df, low_df, vol_df = (
+                df.loc[keep] for df in (close_df, open_df, high_df, low_df, vol_df))
+            latest_bar = close_df.index[-1]
         is_fresh, expected = check_data_freshness(latest_bar)
         if not is_fresh:
             msg = (f"行情最新日期 {latest_bar.strftime('%Y-%m-%d')} 落後於應有的交易日 "
