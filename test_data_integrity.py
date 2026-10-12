@@ -466,3 +466,32 @@ def test_normal_panel_keeps_every_day():
     c, h, l, v = _panel()
     keep, dropped = DQ.drop_phantom_bars(c, v, h, l)
     assert dropped == [] and len(keep) == len(c)
+
+
+# ── 漏跑警報（2026-10-08：排程延遲到台灣 10/09 00:33，被誤判為補假而跳過）──────
+@pytest.mark.parametrize('last, ref, expected', [
+    ('2026-10-07', '2026-10-09', ['2026-10-08']),   # 10/09 補假跳過，但 10/08 沒處理 → 警報
+    ('2026-10-08', '2026-10-09', []),               # 10/08 已處理 → 正常跳過
+    ('2026-10-07', '2026-10-12', ['2026-10-08']),   # 交易日照常執行，但中間漏了 10/08
+    ('2026-10-08', '2026-10-12', []),               # 10/09–10/11 都是休市 → 無漏跑
+    ('2026-10-07', '2026-10-08', []),               # 正常的下一個交易日
+    ('2026-10-12', '2026-10-12', []),               # 同日重跑
+])
+def test_unprocessed_sessions(last, ref, expected):
+    assert DQ.unprocessed_sessions(last, ref) == expected
+
+
+def test_last_report_date():
+    assert DQ.last_report_date('<p>報表日期: 2026-10-07 &nbsp;|</p>') == '2026-10-07'
+    assert DQ.last_report_date('<html></html>') is None
+
+
+def test_workflow_has_missed_run_alarm():
+    import yaml
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        '.github', 'workflows', 'update_ai_report.yml')
+    steps = yaml.safe_load(open(path, encoding='utf-8'))['jobs']['generate-report']['steps']
+    twcheck = next(s for s in steps if s.get('id') == 'twcheck')
+    assert 'unprocessed_sessions' in twcheck['run'] and 'missed_on_skip' in twcheck['run']
+    alarm = next(s for s in steps if s.get('name') == 'Missed-run alarm')
+    assert 'missed_on_skip' in alarm['if'] and 'exit 1' in alarm['run']

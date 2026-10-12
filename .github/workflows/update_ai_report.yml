@@ -75,15 +75,28 @@ jobs:
           python - <<'PY'
           import os, datetime
           is_trading = True
+          missed = []
           if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
               try:
                   import exchange_calendars as xcals, pandas as pd
-                  from strategy.data_quality import report_reference_date
+                  from strategy.data_quality import report_reference_date, unprocessed_sessions, last_report_date
                   # 以台灣時間往回推 12 小時判定「報表所屬交易日」：排程延遲跨過台灣午夜時
                   # （例：週五的 run 拖到週六 00:30 才開始）不會被誤判成非交易日而跳過。
+                  cal = xcals.get_calendar("XTAI")
                   tw = report_reference_date()
-                  is_trading = bool(xcals.get_calendar("XTAI").is_session(pd.Timestamp(tw)))
+                  is_trading = bool(cal.is_session(pd.Timestamp(tw)))
                   print("報表參考日（台灣）", tw, "交易日?", is_trading)
+                  # 漏跑偵測：最近一次完成的報表日期之後、本參考日之前，是否有交易日沒處理到
+                  last = last_report_date(open("stock_report.html", encoding="utf-8").read())
+                  if last:
+                      missed = unprocessed_sessions(last, tw, cal)
+                      print("最近完成的報表日期", last, "→ 未處理的交易日", missed or "無")
+                  else:
+                      print("::warning::stock_report.html 找不到報表日期，無法做漏跑偵測")
+                  if missed and is_trading:
+                      # 今天照常執行（訊號由完整歷史重算），但被跳過那天的訂單已無法自動產生
+                      print(f"::error::漏跑交易日 {', '.join(missed)}：當天訂單未產生。"
+                            f"可用「Regenerate orders」workflow 補算（signal_date 填上述日期）")
               except Exception as e:
                   print("行事曆判定失敗，預設執行:", e); is_trading = True
                   print(f"::warning::XTAI 行事曆判定失敗，預設執行: {e}")
@@ -91,6 +104,8 @@ jobs:
               print("手動觸發 → 一律執行")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"is_trading={'true' if is_trading else 'false'}\n")
+              # 只在「本次跳過」時用來讓 run 變紅（交易日照常執行，不影響當天部署）
+              f.write(f"missed_on_skip={','.join(missed) if (missed and not is_trading) else ''}\n")
           PY
 
       # ── 四個策略各自產報表；每份用 sed 把標題改成各自策略名（避免全顯示 v8.5 混淆）──
@@ -176,9 +191,24 @@ jobs:
         if: github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.is_trading == 'true'
         run: python build_paper_page.py
 
+      # 漏跑警報：本次判定為非交易日而跳過，但最近的交易日還沒處理 → 讓 run 變紅，GitHub 會寄信。
+      # （跳過日不產生新內容，run 變紅不影響網站；交易日照常執行，只在 Annotations 顯示錯誤。）
+      - name: Missed-run alarm
+        if: always() && steps.twcheck.outputs.missed_on_skip != ''
+        run: |
+          D="${{ steps.twcheck.outputs.missed_on_skip }}"
+          echo "::error::本次排程判定為非交易日而跳過，但交易日 ${D} 尚未產生報表與訂單（排程延遲或漏跑）"
+          cat >> "$GITHUB_STEP_SUMMARY" <<MD
+          ## ❌ 漏跑交易日：${D}
+          GitHub 排程延遲或漏跑，該交易日的報表與訂單沒有產生。處置：
+          1. Actions → **AI Quant Trading Report v9** → Run workflow（補產最新報表）
+          2. Actions → **Regenerate orders for a past date (audit only)** → signal_date 填 \`${D%%,*}\`（補算當天訂單）
+          MD
+          exit 1
+
       # 失敗時在 run 摘要頁寫出判讀與處置步驟（新鮮度關卡、訂單驗證等都會讓 run 失敗）
       - name: Failure guide
-        if: failure() && github.event.schedule != '0 10 1 * *'
+        if: failure() && github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.missed_on_skip == ''
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'MD'
           ## ❌ 今日報表與訂單未產生（舊訂單與網站維持前一版）
