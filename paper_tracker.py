@@ -34,6 +34,10 @@ from strategy.portfolio_vol_target import (
 )
 from strategy.risk_metrics import compute_tiered_risk_summary, format_tiered_risk_summary
 from strategy.core_holdings import CoreHoldingsManager
+from strategy.data_quality import (
+    alert, filter_codes_by_report_universe, filter_orders_by_universe, is_valid_tw_code,
+    reconcile_parsed_signals,
+)
 
 DATA_FILE = 'paper_equity.json'
 HTML_FILE = 'paper_trading.html'
@@ -166,9 +170,11 @@ def get_current_bars(tickers):
             bars.update(read_bars(download(list(two_symbols.values())), two_symbols))
         still_missing = [t for t in tickers if t not in bars]
         if still_missing:
-            print(f"   ⚠️ 無法取得報價: {', '.join(still_missing)}")
+            # 舊行為只印一行，該筆訊號就被靜默跳過（3529O 事故即如此）
+            alert(f"無法取得報價（.TW/.TWO 皆無），相關訊號與持倉今日不會更新: "
+                  f"{', '.join(still_missing)}")
     except Exception as e:
-        print(f"   ⚠️ 價格下載失敗: {e}")
+        alert(f"價格下載失敗，今日 paper 無法正確更新: {e}", level='error')
     return bars
 
 
@@ -298,12 +304,17 @@ def extract_signals_from_orders(run_day=None):
             with open(f, encoding='utf-8') as fh:
                 payload = json.load(fh)
         except Exception as e:
-            print(f"   ⚠️ orders JSON 讀取失敗 {f}: {e}")
+            alert(f"orders JSON 讀取失敗 {f}: {e}")
             continue
-        for order in payload.get('orders', []):
+        file_orders = filter_orders_by_universe(
+            payload.get('orders', []), payload.get('universe'), source=os.path.basename(f))
+        for order in file_orders:
             if order.get('side') != 'buy':
                 continue
-            t = order['ticker']
+            t = str(order['ticker'])
+            if not is_valid_tw_code(t):
+                alert(f"{os.path.basename(f)} 訂單代號格式不合法，已拒收: {t}", level='error')
+                continue
             prev = merged.get(t)
             if prev is None:
                 merged[t] = order
@@ -350,20 +361,28 @@ def extract_signals_from_report(run_day=None):
     for row in rows:
         if '建議買進' not in row:
             continue
-        ticker_m = re.search(r'<td>(\d{4})</td>', row)
-        entry_m = re.findall(r'<td[^>]*>([\d\.]+)</td>', row)
+        # 依欄位位置解析（0=代號, 1=分數, 2=價格），不再用「第幾個數字」推位置：
+        # 帶字母的代號（如 00631L）不是純數字，舊寫法會讓價格欄位錯位。
+        cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
         tp_m = re.search(r'停利.*?>([\d\.]+)<', row)
         sl_m = re.search(r'停損.*?>([\d\.]+)<', row)
-        if ticker_m and len(entry_m) >= 3 and tp_m and sl_m:
+        code = cells[0].strip() if cells else ''
+        if len(cells) >= 3 and is_valid_tw_code(code) and tp_m and sl_m:
+            try:
+                score_v, entry_v = float(cells[1]), float(cells[2])
+            except ValueError:
+                continue
             signals.append({
-                'ticker': ticker_m.group(1),
-                'score': float(entry_m[1]),
-                'entry': float(entry_m[2]),  # third number is entry price (1st=ticker, 2nd=score, 3rd=price)
+                'ticker': code,
+                'score': score_v,
+                'entry': entry_v,
                 'tp': float(tp_m.group(1)),
                 'sl': float(sl_m.group(1)),
                 'max_hold_days': 20,
             })
-    return signals
+    reconcile_parsed_signals(html, [s['ticker'] for s in signals], source=report_path)
+    return filter_codes_by_report_universe(html, signals, code_of=lambda s: s['ticker'],
+                                           source=report_path)
 
 def _latest_market_date(reference='0050'):
     """回傳 yfinance 最新可得的交易日（用參考標的探測），失敗回 None。"""
@@ -867,6 +886,9 @@ def _download_historical_bars(tickers: list, start_date: str, end_date: str) -> 
             progress=False, auto_adjust=False, threads=True,
         )
         bars.update(parse_bars(two_df, two_map))
+    still_missing = [t for t in tickers if t not in bars]
+    if still_missing:
+        alert(f"replay 無法取得歷史報價（.TW/.TWO 皆無）: {', '.join(still_missing)}")
     return bars
 
 

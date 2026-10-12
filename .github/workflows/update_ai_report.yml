@@ -33,6 +33,10 @@ on:
         description: '跳空過濾 ATR 倍數'
         required: false
         default: '1.5'
+      allow_stale:
+        description: '行情落後於應有交易日時仍強制產生報表（預設 false＝中止，不出單）'
+        required: false
+        default: 'false'
 
 # 防止多個 run 同時 push 造成 race condition
 concurrency:
@@ -74,11 +78,15 @@ jobs:
           if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
               try:
                   import exchange_calendars as xcals, pandas as pd
-                  tw = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).date()
+                  from strategy.data_quality import report_reference_date
+                  # 以台灣時間往回推 12 小時判定「報表所屬交易日」：排程延遲跨過台灣午夜時
+                  # （例：週五的 run 拖到週六 00:30 才開始）不會被誤判成非交易日而跳過。
+                  tw = report_reference_date()
                   is_trading = bool(xcals.get_calendar("XTAI").is_session(pd.Timestamp(tw)))
-                  print("台灣日期", tw, "交易日?", is_trading)
+                  print("報表參考日（台灣）", tw, "交易日?", is_trading)
               except Exception as e:
                   print("行事曆判定失敗，預設執行:", e); is_trading = True
+                  print(f"::warning::XTAI 行事曆判定失敗，預設執行: {e}")
           else:
               print("手動觸發 → 一律執行")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
@@ -100,7 +108,8 @@ jobs:
             --hold-days ${{ github.event.inputs.hold_days || '20' }} \
             --top-k ${{ github.event.inputs.top_k || '7' }} \
             --gap-filter ${{ github.event.inputs.gap_filter || '1.5' }} \
-            --start-date 2019-01-01 --eval-start 2019-01-01
+            --start-date 2019-01-01 --eval-start 2019-01-01 \
+            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }}
           sed -e 's#backtest_chart.png#chart_v85.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · v8.5 基準(純動量)#g' \
               stock_report.html > report_v85.html
@@ -114,7 +123,8 @@ jobs:
             --no-hybrid-tiered --consec-loss-limit 3 \
             --sl-atr 3.5 --regime-floor 0.0 --dynamic-topk \
             --corr-select-max 0.7 --corr-select-window 60 --corr-select-cap 2 \
-            --start-date 2019-01-01 --eval-start 2019-01-01
+            --start-date 2019-01-01 --eval-start 2019-01-01 \
+            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }}
           # 保存 GUARD 的當日訂單（下方 SURGE PRO 那步會覆蓋 orders_<date>.json，故先複製給 GUARD paper 用）
           cp "$(ls -t artifacts/orders_2*.json | head -1)" artifacts/orders_guard_latest.json || true
           sed -e 's#backtest_chart.png#chart_guard.png#g' \
@@ -133,7 +143,8 @@ jobs:
             --regime-sizing --strong-regime-mult 1.25 --strong-breadth-min 0.55 \
             --strong-vix-max 25.0 --max-regime-scale 1.7 \
             --strong-tiers "0.65,20,1.45;0.75,15,1.75" \
-            --start-date 2019-01-01 --eval-start 2019-01-01
+            --start-date 2019-01-01 --eval-start 2019-01-01 \
+            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }}
           sed -e 's#backtest_chart.png#chart_surge.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE 強勢加碼#g' \
               stock_report.html > report_surge.html
@@ -150,7 +161,8 @@ jobs:
             --regime-sizing --strong-regime-mult 1.25 --strong-breadth-min 0.55 \
             --strong-vix-max 28.0 --max-regime-scale 1.9 \
             --strong-tiers "0.62,18,1.7;0.72,15,1.85" \
-            --start-date 2019-01-01 --eval-start 2019-01-01
+            --start-date 2019-01-01 --eval-start 2019-01-01 \
+            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }}
           # report_surge_pro.html 用自己的圖檔；保留 stock_report.html + backtest_chart.png 當主報表
           sed -e 's#backtest_chart.png#chart_surge_pro.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE PRO 追最高報酬#g' \
@@ -163,6 +175,33 @@ jobs:
       - name: Paper page (四策略比較)
         if: github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.is_trading == 'true'
         run: python build_paper_page.py
+
+      # 失敗時在 run 摘要頁寫出判讀與處置步驟（新鮮度關卡、訂單驗證等都會讓 run 失敗）
+      - name: Failure guide
+        if: failure() && github.event.schedule != '0 10 1 * *'
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'MD'
+          ## ❌ 今日報表與訂單未產生（舊訂單與網站維持前一版）
+          先看上方 Annotations 的 ❌ 訊息：
+          - **行情最新日期落後於應有的交易日**：(1) 臨時休市（颱風等，XTAI 不知道）→ 不需處理；
+            (2) Yahoo 尚未更新 → 稍後 Re-run，或 Run workflow 並把 `allow_stale` 設為 `true`。
+          - **訂單驗證失敗 / 行情欄位出現未請求的代號**：程式或資料源異常，**不要**用 allow_stale 繞過，請回報。
+          MD
+          echo "::error::今日報表未產生，處置方式見 run 摘要頁（Summary）"
+
+      # 稽核軌跡：orders/metadata/signals 被 .gitignore 排除、只存在 runner 上，
+      # 事後無從查證。上傳成 Actions artifact（失敗時也上傳，便於追查）。
+      - name: Upload order artifacts (audit trail)
+        if: always() && github.event.schedule != '0 10 1 * *'
+        uses: actions/upload-artifact@v4
+        with:
+          name: orders-${{ github.run_id }}
+          path: |
+            artifacts/orders_*.json
+            artifacts/metadata_*.json
+            artifacts/signals_*.csv
+          if-no-files-found: warn
+          retention-days: 90
 
       - name: Monthly Paper Trading Report
         if: github.event.schedule == '0 10 1 * *'

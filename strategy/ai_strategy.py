@@ -15,9 +15,17 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import warnings
 
-warnings.filterwarnings('ignore')
+from strategy.data_quality import (  # noqa: F401  (re-export 供舊程式 import)
+    MIN_BAR_COVERAGE,
+    alert,
+    drop_phantom_bars,
+    normalize_tw_symbol,
+    quiet_routine_warnings,
+)
+
+# 只靜音例行的 pandas/numpy 雜訊；不再全域 ignore（舊寫法會吞掉所有警告）
+quiet_routine_warnings()
 
 
 def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
@@ -52,6 +60,7 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
         start_dt = end_dt - timedelta(days=days)
         actual_days = days
 
+    tickers = [str(t) for t in tickers]
     print(f"📥 正在批次下載 {len(tickers)} 檔股票的歷史資料 "
           f"({start_dt.strftime('%Y-%m-%d')} → {end_dt.strftime('%Y-%m-%d')}, "
           f"~{actual_days} 天)...")
@@ -69,13 +78,20 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
         else:
             return pd.DataFrame(index=raw_df.index)
         extracted = extracted.copy()
-        extracted.columns = [
-            str(c).replace('.TW', '').replace('.TWO', '')
-            for c in extracted.columns
-        ]
+        # 只剝除「結尾」的 .TWO / .TW。舊寫法 replace('.TW','').replace('.TWO','')
+        # 會先把 '3529.TWO' 的 '.TW' 拿掉 → '3529O'，產生不存在的代號（2026-05-26 起的 bug）。
+        extracted.columns = [normalize_tw_symbol(c) for c in extracted.columns]
         if extracted.columns.duplicated().any():
+            # 同一代號同時有 .TW（空）與 .TWO（有值）欄 → 逐日取第一個非空值合併
             extracted = extracted.T.groupby(level=0).first().T
-        return extracted
+        unknown = sorted(set(extracted.columns) - set(map(str, tickers)))
+        if unknown:
+            raise ValueError(
+                f"行情欄位出現未請求的代號 {unknown}（欄位: {field}）。"
+                f"代號正規化有誤，拒絕繼續以免產生不存在的標的。"
+            )
+        # groupby 會把欄位按字母排序 → 先還原成請求順序（最終順序在下方統一決定）
+        return extracted[[t for t in tickers if t in extracted.columns]]
 
     def _download_symbols(symbols):
         downloaded = []
@@ -86,8 +102,16 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
             total_batches = (len(symbols) + batch_size - 1) // batch_size
             print(f"   📦 下載批次 {batch_num}/{total_batches} ({len(batch)} 檔)...")
             batch_df = yf.download(batch, start=start_dt, end=end_dt, progress=False)
-            if not batch_df.empty:
-                downloaded.append(batch_df)
+            if batch_df is None or batch_df.empty:
+                continue
+            if not isinstance(batch_df.columns, pd.MultiIndex):
+                # 舊版 yfinance 單檔下載回傳單層欄位（'Close'...）；補上代號層，
+                # 否則欄名 'Close' 會被誤當成股票代號。
+                if len(batch) != 1:
+                    raise ValueError(f"yfinance 回傳單層欄位但請求了 {len(batch)} 檔: {batch}")
+                batch_df = batch_df.copy()
+                batch_df.columns = pd.MultiIndex.from_product([batch_df.columns, batch])
+            downloaded.append(batch_df)
         return downloaded
 
     # yfinance 批次下載有大小限制，分批處理
@@ -112,13 +136,46 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
         if two_dfs:
             df = pd.concat([df] + two_dfs, axis=1)
 
-    data = {}
+    # 欄位順序 = 「下載回來的原始順序」：.TW 各批次的欄位在前，.TWO 補抓的上櫃股在後。
+    # 這正是 2026-05-26 以來實際上線的順序（當時上櫃股以 '3529O' 之名附加在最後）。
+    # 回測分數高度量化、常有多檔同分，同分時依欄位順序決定進場；
+    # 沿用同一順序，修正代號 bug 時才不會順便改變選股結果。
+    two_set = set(missing_tickers)
+    symbols = list(dict.fromkeys(df.columns.get_level_values(1)))
+    tw_order = [normalize_tw_symbol(x) for x in symbols if str(x).endswith('.TW')]
+    two_order = [normalize_tw_symbol(x) for x in symbols if str(x).endswith('.TWO')]
+    col_order = list(dict.fromkeys(
+        [t for t in tw_order if t not in two_set] + two_order
+        + [t for t in tickers if t not in two_set]   # 保底：理論上已全部涵蓋
+    ))
+
+    raw = {}
     for col in ['Close', 'Open', 'High', 'Low', 'Volume']:
         temp_df = _extract_field(df, col)
         if temp_df.empty:
-            print(f"   ⚠️ 欄位 {col} 不存在，跳過")
+            alert(f"行情欄位 {col} 不存在，跳過")
             continue
+        raw[col] = temp_df[[t for t in col_order if t in temp_df.columns]]
 
+    if 'Close' not in raw:
+        raise RuntimeError("下載結果沒有 Close 欄位")
+
+    still_missing = [t for t in tickers
+                     if t not in raw['Close'].columns or raw['Close'][t].dropna().empty]
+    if still_missing:
+        alert(f"{len(still_missing)} 檔 .TW/.TWO 皆無資料，將不參與選股: "
+              f"{', '.join(still_missing)}")
+
+    # 丟棄假 bar：在 ffill 之前判定，否則 Close 會被前一日補值、偽裝成新的一天
+    keep_idx, dropped = drop_phantom_bars(raw['Close'], raw.get('Volume'),
+                                          raw.get('High'), raw.get('Low'))
+    if dropped:
+        alert(f"丟棄 {len(dropped)} 個無有效行情的日期（休市或資料未發布）: "
+              f"{', '.join(d.strftime('%Y-%m-%d') for d in dropped[-10:])}")
+
+    data = {}
+    for col, temp_df in raw.items():
+        temp_df = temp_df.loc[temp_df.index.isin(keep_idx)]
         # Keep tradable bars raw. Forward-filling Open/High/Low/Volume creates
         # fake fills and fake liquidity on missing or suspended days. Close is
         # only used as an indicator/marking input here, so allow a one-day carry
@@ -252,7 +309,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             residual_mom = stock_cum_20.sub(mkt_cum_20, axis=0)
             print("   \U0001f52c 殘差動量已計算 (market-beta adjusted)")
         except Exception as e:
-            print(f"   ⚠️ 殘差動量計算失敗: {e}")
+            alert(f"殘差動量計算失敗: {e}")
 
     # === 趨勢品質 ===
     tq_score = None
@@ -265,7 +322,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             tq_score = ma60_slope * 100 + ma_alignment * 0.5 + overheat_penalty * 0.3
             print("   \U0001f4d0 趨勢品質已計算")
         except Exception as e:
-            print(f"   ⚠️ 趨勢品質計算失敗: {e}")
+            alert(f"趨勢品質計算失敗: {e}")
 
     # === 流動性穩定度 ===
     liq_stab = None
@@ -332,7 +389,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             rank_rsi = compute_rsi_rank(close_df, period=20, universe_mask=universe_mask)
             print(f"   📈 RSI-20 因子已計算 (weight={rsi_weight})")
         except Exception as e:
-            print(f"   ⚠️ RSI 因子計算失敗: {e}")
+            alert(f"RSI 因子計算失敗: {e}")
 
     if breakout_weight > 0:
         try:
@@ -340,7 +397,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             rank_breakout = compute_breakout_rank(close_df, window=300, universe_mask=universe_mask)
             print(f"   🏔️ Breakout-300 因子已計算 (weight={breakout_weight})")
         except Exception as e:
-            print(f"   ⚠️ Breakout 因子計算失敗: {e}")
+            alert(f"Breakout 因子計算失敗: {e}")
 
     if value_weight > 0:
         try:
@@ -351,7 +408,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             )
             print(f"   💰 Value (PB+PE) 因子已計算 (weight={value_weight})")
         except Exception as e:
-            print(f"   ⚠️ Value 因子計算失敗: {e}")
+            alert(f"Value 因子計算失敗: {e}")
 
     if rev_momentum_weight > 0:
         try:
@@ -359,7 +416,7 @@ def engineer_features(close_df, vol_df, universe_mask=None,
             rank_rev_mom = compute_revenue_momentum(close_df, period=60, universe_mask=universe_mask)
             print(f"   📊 RevMomentum-60 因子已計算 (weight={rev_momentum_weight})")
         except Exception as e:
-            print(f"   ⚠️ RevMomentum 因子計算失敗: {e}")
+            alert(f"RevMomentum 因子計算失敗: {e}")
 
     # === 因子加權 ===
     if ml_weights:

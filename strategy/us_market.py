@@ -18,7 +18,10 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import warnings
 
-warnings.filterwarnings('ignore')
+from strategy.data_quality import quiet_routine_warnings
+
+# 只靜音例行雜訊，不再全域吞掉所有警告
+quiet_routine_warnings()
 
 
 def fetch_us_signals(start_date=None, end_date=None, days=1500):

@@ -516,10 +516,15 @@ class EventDrivenBacktester:
                     self._vix_series = vix['Close'].squeeze()
                 elif ('Close', '^VIX') in vix.columns:
                     self._vix_series = vix[('Close', '^VIX')].squeeze()
-                if self._vix_series is not None:
+                if self._vix_series is not None and len(self._vix_series.dropna()) > 0:
                     print(f"   🌍 Macro Regime: VIX 已載入 ({len(self._vix_series)} 天)")
+                else:
+                    self._vix_series = None
+                    from strategy.data_quality import alert
+                    alert("VIX 無資料：VIX 相關的 regime / 強勢加碼條件將失效，結果與正常日不同")
             except Exception as e:
-                print(f"   ⚠️ VIX 下載失敗: {e}")
+                from strategy.data_quality import alert
+                alert(f"VIX 下載失敗：VIX 相關的 regime / 強勢加碼條件將失效: {e}")
         # === Sector Flow Tilt：預計算板塊動量 ===
         self._sector_flow_df = None
         self._sector_composition = None

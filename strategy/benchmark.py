@@ -13,7 +13,10 @@ import numpy as np
 from datetime import datetime, timedelta
 import warnings
 
-warnings.filterwarnings('ignore')
+from strategy.data_quality import alert, quiet_routine_warnings
+
+# 只靜音例行雜訊，不再全域吞掉所有警告
+quiet_routine_warnings()
 
 
 def fetch_benchmark(ticker='0050', days=800, start_date=None, end_date=None):
@@ -51,7 +54,7 @@ def fetch_benchmark(ticker='0050', days=800, start_date=None, end_date=None):
     df = yf.download(f"{ticker}.TW", start=start_dt, end=end_dt, progress=False)
 
     if df.empty:
-        print(f"   ⚠️ 無法下載 {ticker} 資料")
+        alert(f"無法下載 Benchmark {ticker} 資料（regime filter 會因此失效）")
         return pd.Series(dtype=float)
 
     close = df['Close']
@@ -62,7 +65,7 @@ def fetch_benchmark(ticker='0050', days=800, start_date=None, end_date=None):
     dropped_count = int(close.isna().sum())
     close = close.dropna()
     if close.empty:
-        print(f"   ⚠️ {ticker} 無有效收盤價資料")
+        alert(f"Benchmark {ticker} 無有效收盤價資料（regime filter 會因此失效）")
         return pd.Series(dtype=float)
 
     if dropped_count:
