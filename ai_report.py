@@ -2348,7 +2348,10 @@ def main():
                     tiered_scales_log=tiered_scales_log,
                     allowed_tickers=tickers)
     if args.archive_label and args.end_date is None:
-        archive_run(args.archive_label, close_df, open_df, high_df, low_df, vol_df)
+        try:   # 封存失敗不可拖垮當日報表與訂單：只發警告
+            archive_run(args.archive_label, close_df, open_df, high_df, low_df, vol_df)
+        except Exception as e:
+            alert(f'封存 {args.archive_label} 失敗（報表與訂單不受影響）: {type(e).__name__}: {e}')
     print("\n🚀 全部完成！請打開 stock_report.html 查看結果。")
 
 
