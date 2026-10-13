@@ -91,7 +91,7 @@ def fill_gaps(raw, gaps, get_quotes, allow_trailing=False, tol=FACTOR_TOL,
     - 前向 k_f = Yahoo 前一列還原收盤 / 當日參考價。
     - 反向 k_b：由下一根 Yahoo bar 往回串接交易所的「參考價 / 收盤」，
       adj_g = adj_N × Π(ref_d / close_d)，d 走過 g 之後到 N 的每個交易日（含中間其他缺日）。
-    兩者都有 → 必須一致；只有一個 → 採用並記為單向；都沒有 → 不補。
+    兩者都有 → 必須一致（相差 > tol 則不補），並採用反向因子；只有一個 → 採用並記為單向；都沒有 → 不補。
     """
     raw = {k: v.copy() for k, v in raw.items()}
     yahoo_close = raw['Close'].copy()
@@ -195,7 +195,10 @@ def fill_gaps(raw, gaps, get_quotes, allow_trailing=False, tol=FACTOR_TOL,
                 res['rejected'].append(f'{code}(前後換算不一致 {k_f:.4f}/{k_b:.4f})')
                 res['rejected_codes'].append(code)
                 continue
-            k = k_f if k_f is not None else k_b
+            # 兩者一致時用反向因子：它錨定在下一根 Yahoo bar，與 Yahoo 自己的還原尺度一致。
+            # GitHub 第三輪驗證：Yahoo 偶爾漏記股利（1760 2026-06-11、2890 2026-10-07），
+            # 前向因子（依交易所參考價）會與 Yahoo 前後 bar 差 0.1~0.34%；反向因子則 < 2e-7。
+            k = k_b if k_b is not None else k_f
             if k is None:
                 res['rejected'].append(f'{code}(參考價不可用且無法反向換算)')
                 res['rejected_codes'].append(code)

@@ -519,3 +519,15 @@ def test_fetch_twse_fills_x_rows_from_twt49u(monkeypatch):
     monkeypatch.setattr(TQ, '_get_json', fake_get)
     df = TQ.fetch_twse('2025-06-12')
     assert df.at['2330', 'ref'] == pytest.approx(1060.49998)
+
+
+def test_interior_prefers_backward_factor_when_yahoo_missed_a_small_dividend():
+    """5274 在 GAP 當天除息 0.3%，但 Yahoo 漏記（第三輪驗證實際見到 1760、2890）。
+    補值必須跟 Yahoo 自己的尺度一致，不能在補值日前後造出 0.3% 的假跳動。"""
+    raw, refs, yahoo = _market()
+    prev = yahoo['Close'].index[yahoo['Close'].index < GAP][-1]
+    refs = refs.copy()
+    refs.at[GAP, '5274'] = raw['Close'].at[prev, '5274'] * (1 - 0.003)
+    filled, res = GF.fill_gaps(_drop(yahoo, [GAP]), [GAP], _quotes_fn(raw, refs))
+    assert res[0]['rejected'] == []
+    np.testing.assert_allclose(filled['Close'].at[GAP, '5274'], yahoo['Close'].at[GAP, '5274'], rtol=1e-9)
