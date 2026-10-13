@@ -1574,6 +1574,55 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
     print(f"   📁 Artifacts 已存入 artifacts/ 目錄")
 
 
+ARCHIVE_INPUT_SESSIONS = 5
+
+
+def archive_run(label, close_df, open_df, high_df, low_df, vol_df,
+                artifacts_dir='artifacts', archive_root='archive'):
+    """永久保存當日執行結果（artifacts/ 的訂單、訊號、metadata 被 .gitignore 排除，只存在 runner 上）。
+
+    archive/YYYY/MM/DD/<label>/  orders.json、metadata.json、signals.csv（完整分數排序）
+    archive/YYYY/MM/DD/inputs_last5.csv  最後 5 個交易日、所有股票的 OHLCV（各策略相同，只寫一份）
+    archive/YYYY/MM/DD/inputs_digest.json  整個輸入面板的雜湊，供日後確認重算用的是同一份資料
+    """
+    import hashlib
+    import shutil
+    d = close_df.index[-1]
+    ymd = d.strftime('%Y%m%d')
+    day_dir = os.path.join(archive_root, d.strftime('%Y'), d.strftime('%m'), d.strftime('%d'))
+    out = os.path.join(day_dir, label)
+    os.makedirs(out, exist_ok=True)
+    copied = []
+    for src, dst in [(f'orders_{ymd}.json', 'orders.json'), (f'metadata_{ymd}.json', 'metadata.json'),
+                     (f'signals_{ymd}.csv', 'signals.csv')]:
+        path = os.path.join(artifacts_dir, src)
+        if os.path.exists(path):
+            shutil.copyfile(path, os.path.join(out, dst))
+            copied.append(dst)
+        else:
+            alert(f'封存 {label}: 找不到 {path}，未封存此檔')
+    tail = close_df.index[-ARCHIVE_INPUT_SESSIONS:]
+    frames = {'open': open_df, 'high': high_df, 'low': low_df, 'close': close_df, 'volume': vol_df}
+    parts = []
+    for k, v in frames.items():
+        t = v.loc[v.index.isin(tail)].copy()
+        t.index.name = 'date'
+        parts.append(t.reset_index().melt(id_vars='date', var_name='ticker', value_name=k)
+                     .set_index(['date', 'ticker']))
+    long = pd.concat(parts, axis=1).sort_index()
+    long.round(6).to_csv(os.path.join(day_dir, 'inputs_last5.csv'))
+    digest = {
+        'first_date': close_df.index[0].strftime('%Y-%m-%d'),
+        'last_date': d.strftime('%Y-%m-%d'),
+        'rows': int(close_df.shape[0]), 'tickers': int(close_df.shape[1]),
+        'sha256': {k: hashlib.sha256(v.round(6).to_csv().encode()).hexdigest() for k, v in frames.items()},
+    }
+    with open(os.path.join(day_dir, 'inputs_digest.json'), 'w', encoding='utf-8') as f:
+        json.dump(digest, f, indent=2)
+    print(f"   🗄️ 已封存到 {out}/（{', '.join(copied)}）與 {day_dir}/inputs_last5.csv")
+    return out
+
+
 def parse_args():
     """解析命令列參數。"""
     parser = argparse.ArgumentParser(
@@ -1997,6 +2046,11 @@ def parse_args():
     )
 
     parser.add_argument(
+        '--archive-label', default=None,
+        help='每日正式執行用：把訂單、完整訊號、metadata 與最後 5 個交易日的輸入行情'
+             '永久存到 archive/年/月/日/<label>/（會被 commit）。指定 --end-date 時不封存。'
+    )
+    parser.add_argument(
         '--allow-gaps', action='store_true',
         help='Yahoo 中間缺日且無法從交易所補回時，仍繼續執行（研究用）。'
              '預設：缺日落在最近 260 個交易日內會直接中止，因為動能、均線、ATR 會被算錯。'
@@ -2293,6 +2347,8 @@ def main():
                     show_inst=args.show_inst,
                     tiered_scales_log=tiered_scales_log,
                     allowed_tickers=tickers)
+    if args.archive_label and args.end_date is None:
+        archive_run(args.archive_label, close_df, open_df, high_df, low_df, vol_df)
     print("\n🚀 全部完成！請打開 stock_report.html 查看結果。")
 
 

@@ -406,7 +406,7 @@ def _ai_report_args(run):
         if skip:
             skip = False
             continue
-        if t == '--end-date':
+        if t in ('--end-date', '--archive-label'):     # 帶一個值的操作旗標
             skip = True
             continue
         if t in ('--allow-stale', '--allow-gaps', '--fill-latest-from-exchange'):   # 操作旗標，非策略參數
@@ -533,3 +533,40 @@ def test_twcheck_scheduled_dispatch_and_idempotency(tmp_path, monkeypatch, event
     out = _run_twcheck(tmp_path, monkeypatch, event, scheduled, ref, last)
     assert out['is_trading'] == is_trading
     assert out['missed_on_skip'] == missed
+
+
+# ── 每日封存（永久保存訂單、訊號、metadata、輸入行情）──────────────
+def test_archive_run_writes_permanent_copy(tmp_path):
+    import json as _json
+    from ai_report import archive_run
+    idx = pd.bdate_range('2026-10-01', '2026-10-13')
+    close = pd.DataFrame({'2330': np.arange(len(idx), dtype=float) + 100, '5274': np.nan}, index=idx)
+    art = tmp_path / 'artifacts'
+    art.mkdir()
+    (art / 'orders_20261013.json').write_text('{"signal_date": "2026-10-13"}', encoding='utf-8')
+    (art / 'metadata_20261013.json').write_text('{}', encoding='utf-8')
+    (art / 'signals_20261013.csv').write_text('ticker,Score\n2330,1\n', encoding='utf-8')
+    out = archive_run('guard', close, close, close, close, close,
+                      artifacts_dir=str(art), archive_root=str(tmp_path / 'archive'))
+    day = tmp_path / 'archive' / '2026' / '10' / '13'
+    assert out == str(day / 'guard')
+    assert _json.loads((day / 'guard' / 'orders.json').read_text())['signal_date'] == '2026-10-13'
+    assert (day / 'guard' / 'signals.csv').exists() and (day / 'guard' / 'metadata.json').exists()
+    inputs = pd.read_csv(day / 'inputs_last5.csv')
+    assert len(inputs) == 5 * 2 and set(inputs.columns) >= {'date', 'ticker', 'open', 'close', 'volume'}
+    assert inputs['close'].isna().sum() == 5           # 缺值保留，不可被丟掉
+    digest = _json.loads((day / 'inputs_digest.json').read_text())
+    assert digest['last_date'] == '2026-10-13' and set(digest['sha256']) == {'open', 'high', 'low', 'close', 'volume'}
+
+
+def test_workflow_archives_every_strategy_and_commits_it():
+    import yaml
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        '.github', 'workflows', 'update_ai_report.yml')
+    wf = yaml.safe_load(open(path, encoding='utf-8'))
+    steps = wf['jobs']['generate-report']['steps']
+    report_steps = [s for s in steps if 'python ai_report.py' in s.get('run', '')]
+    labels = sorted(s['run'].split('--archive-label', 1)[1].split()[0] for s in report_steps)
+    assert labels == ['guard', 'surge', 'surge_pro', 'v85']
+    commit = next(s for s in steps if s.get('name') == 'Commit and push')
+    assert 'git add archive' in commit['run']
