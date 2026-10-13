@@ -5,6 +5,8 @@ name: Regenerate orders for a past date (audit only)
 # - 用 --end-date = 訊號日 + 1 天（yfinance 的 end 不含當天），資料只到訊號日，無前視。
 # - 策略參數必須與 update_ai_report.yml 完全一致（test_data_integrity.py 會檢查）。
 # 注意：yfinance 預設回傳除權息調整後價格；若訊號日之後有除權息，重算價格會與當天略有差異。
+# --fill-latest-from-exchange：Yahoo 若永久缺訊號日當天（例 2026-10-12），改用 TWSE/TPEx 官方行情補上，
+#   以 Yahoo 前一日還原價換算到同一尺度（見 strategy/gap_fill.py）；補值紀錄寫在 orders 的 data_gap_fills。
 
 on:
   workflow_dispatch:
@@ -63,7 +65,7 @@ jobs:
             --sl-atr 3.5 --regime-floor 0.0 --dynamic-topk \
             --corr-select-max 0.7 --corr-select-window 60 --corr-select-cap 2 \
             --start-date 2019-01-01 --eval-start 2019-01-01 \
-            --end-date ${{ steps.d.outputs.end }}
+            --end-date ${{ steps.d.outputs.end }} --fill-latest-from-exchange
           mkdir -p regenerated
           test -f artifacts/orders_${{ steps.d.outputs.compact }}.json || {
             echo "::error::GUARD 沒有產生 orders_${{ steps.d.outputs.compact }}.json（最新 bar 不是訊號日，資料缺漏？）"; exit 1; }
@@ -82,7 +84,7 @@ jobs:
             --strong-vix-max 28.0 --max-regime-scale 1.9 \
             --strong-tiers "0.62,18,1.7;0.72,15,1.85" \
             --start-date 2019-01-01 --eval-start 2019-01-01 \
-            --end-date ${{ steps.d.outputs.end }}
+            --end-date ${{ steps.d.outputs.end }} --fill-latest-from-exchange
           test -f artifacts/orders_${{ steps.d.outputs.compact }}.json || {
             echo "::error::SURGE PRO 沒有產生 orders_${{ steps.d.outputs.compact }}.json"; exit 1; }
           cp artifacts/orders_${{ steps.d.outputs.compact }}.json   regenerated/orders_surge_pro_${{ steps.d.outputs.compact }}.json

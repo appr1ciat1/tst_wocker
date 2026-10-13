@@ -14,12 +14,14 @@ from datetime import datetime, timedelta
 import warnings
 
 from strategy.data_quality import alert, quiet_routine_warnings
+from strategy.gap_fill import repair_missing_sessions
 
 # 只靜音例行雜訊，不再全域吞掉所有警告
 quiet_routine_warnings()
 
 
-def fetch_benchmark(ticker='0050', days=800, start_date=None, end_date=None):
+def fetch_benchmark(ticker='0050', days=800, start_date=None, end_date=None, fill_gaps=True,
+                    gap_report=None):
     """
     下載 Benchmark 的每日收盤價。
 
@@ -70,6 +72,17 @@ def fetch_benchmark(ticker='0050', days=800, start_date=None, end_date=None):
 
     if dropped_count:
         print(f"   ℹ️ 已忽略 {dropped_count} 筆無效收盤價")
+
+    # Yahoo 整天缺漏的交易日（例：2026-10-12）→ 用交易所行情補回。
+    # 0050 是 regime filter 的大盤代理，缺一天會讓它的 MA60/MA20 窗口悄悄位移。
+    if fill_gaps:
+        close.index = pd.DatetimeIndex(close.index).tz_localize(None).normalize()
+        # 單一標的：交易所查無 = 該標的當天停牌（例：0050 分割 2025-06-11~17），不是資料缺漏
+        raw, results = repair_missing_sessions({'Close': close.to_frame(str(ticker))}, end_dt,
+                                               label=f'Benchmark {ticker}', min_coverage=0.0)
+        close = raw['Close'][str(ticker)].dropna()
+        if gap_report is not None:
+            gap_report.extend(results)
 
     benchmark_equity = close / close.iloc[0]
 

@@ -328,10 +328,13 @@ def test_workflow_guards_are_wired():
     steps = wf['jobs']['generate-report']['steps']
     twcheck = next(s for s in steps if s.get('id') == 'twcheck')
     assert 'report_reference_date' in twcheck['run']
+    checkout = next(s for s in steps if s.get('uses', '').startswith('actions/checkout'))
+    assert checkout['with']['ref'] == '${{ github.ref }}'     # 排隊的 run 要看到最新報表（冪等）
     assert 'utcnow' not in twcheck['run']
     report_steps = [s for s in steps if 'python ai_report.py' in s.get('run', '')]
     assert len(report_steps) == 4
     assert all('--allow-stale' in s['run'] for s in report_steps)
+    assert all('--allow-gaps' in s['run'] for s in report_steps)
     upload = next(s for s in steps if s.get('uses', '').startswith('actions/upload-artifact'))
     assert 'orders_*.json' in upload['with']['path']
     assert 'always()' in upload['if']
@@ -405,7 +408,7 @@ def _ai_report_args(run):
         if t == '--end-date':
             skip = True
             continue
-        if t == '--allow-stale':
+        if t in ('--allow-stale', '--allow-gaps', '--fill-latest-from-exchange'):   # 操作旗標，非策略參數
             continue
         out.append(t)
     return out
@@ -495,3 +498,37 @@ def test_workflow_has_missed_run_alarm():
     assert 'unprocessed_sessions' in twcheck['run'] and 'missed_on_skip' in twcheck['run']
     alarm = next(s for s in steps if s.get('name') == 'Missed-run alarm')
     assert 'missed_on_skip' in alarm['if'] and 'exit 1' in alarm['run']
+
+
+# ── 準時觸發（外部 workflow_dispatch scheduled=true）＋ 冪等跳過 ─────────────
+def _run_twcheck(tmp_path, monkeypatch, event, scheduled, ref_date, last_report):
+    import yaml
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        '.github', 'workflows', 'update_ai_report.yml')
+    wf = yaml.safe_load(open(path, encoding='utf-8'))
+    step = next(s for s in wf['jobs']['generate-report']['steps'] if s.get('id') == 'twcheck')
+    code = step['run'].split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+    (tmp_path / 'stock_report.html').write_text(f'<p>報表日期: {last_report}</p>', encoding='utf-8')
+    out = tmp_path / 'out.txt'
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('GITHUB_EVENT_NAME', event)
+    monkeypatch.setenv('SCHEDULED_INPUT', scheduled)
+    monkeypatch.setenv('GITHUB_OUTPUT', str(out))
+    monkeypatch.setattr(DQ, 'report_reference_date', lambda now_utc=None: date.fromisoformat(ref_date))
+    exec(compile(code, 'twcheck', 'exec'), {})
+    return dict(l.split('=', 1) for l in out.read_text().splitlines())
+
+
+@pytest.mark.parametrize('event, scheduled, ref, last, is_trading, missed', [
+    ('workflow_dispatch', 'true', '2026-10-13', '2026-10-08', 'true', ''),    # 準時觸發，當天未處理 → 執行
+    ('schedule', '', '2026-10-13', '2026-10-13', 'false', ''),                # 備援排程晚到，已處理 → 跳過
+    ('workflow_dispatch', 'true', '2026-10-13', '2026-10-13', 'false', ''),   # 重複觸發 → 跳過
+    ('workflow_dispatch', 'false', '2026-10-13', '2026-10-13', 'true', ''),   # 一般手動 → 一律執行
+    ('workflow_dispatch', 'true', '2026-10-10', '2026-10-08', 'false', ''),   # 國慶日 → 非交易日
+    ('schedule', '', '2026-10-10', '2026-10-07', 'false', '2026-10-08'),      # 非交易日且 10/08 漏跑 → 警報
+])
+def test_twcheck_scheduled_dispatch_and_idempotency(tmp_path, monkeypatch, event, scheduled, ref, last,
+                                                    is_trading, missed):
+    out = _run_twcheck(tmp_path, monkeypatch, event, scheduled, ref, last)
+    assert out['is_trading'] == is_trading
+    assert out['missed_on_skip'] == missed

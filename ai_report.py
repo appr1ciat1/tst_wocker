@@ -39,6 +39,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from strategy.ai_strategy import fetch_panel_data, engineer_features, build_liquid_universe
+from strategy.gap_fill import gap_gate
 from strategy.data_quality import (
     alert, check_data_freshness, is_session_closed, is_valid_tw_code, universe_meta_tag,
 )
@@ -1531,6 +1532,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
         'model_version': strategy_version,
         'universe': sorted(str(t) for t in allowed_tickers) if allowed_tickers is not None else None,
         'validated': True,
+        'data_gap_fills': [g for g in config.get('data_gap_fills', []) if g.get('status') != 'closed'],
         'orders': orders,
     }
     with open(f'artifacts/orders_{date_str}.json', 'w', encoding='utf-8') as f:
@@ -1994,6 +1996,17 @@ def parse_args():
              '預設在未指定 --end-date 時，資料過期會直接中止，避免用舊價格產生訂單。'
     )
 
+    parser.add_argument(
+        '--allow-gaps', action='store_true',
+        help='Yahoo 中間缺日且無法從交易所補回時，仍繼續執行（研究用）。'
+             '預設：缺日落在最近 260 個交易日內會直接中止，因為動能、均線、ATR 會被算錯。'
+    )
+    parser.add_argument(
+        '--fill-latest-from-exchange', action='store_true',
+        help='最後一根 Yahoo bar 之後的交易日也用交易所行情補（單向換算）。'
+             '重算過去訂單時使用（例：Yahoo 永久缺 2026-10-12）。'
+    )
+
     return parser.parse_args()
 
 
@@ -2034,10 +2047,17 @@ def main():
     print("=" * 60)
 
     # Phase 1: 資料下載
+    gap_results = []
     close_df, open_df, high_df, low_df, vol_df = fetch_panel_data(
         tickers, days=args.days,
         start_date=args.start_date, end_date=args.end_date,
+        fill_trailing=args.fill_latest_from_exchange,
+        gap_report=gap_results,
     )
+
+    # Phase 1.2: 中間缺日關卡。補不回來的缺日若落在最近 260 個交易日內，
+    # 今日的動能、均線、ATR 都會把前後兩天接在一起算 → 中止（exit 3），不產生訂單。
+    gap_gate(gap_results, close_df.index, allow=args.allow_gaps)
 
     # Phase 1.5: 資料新鮮度關卡（只在「出今日訂單」模式，即未指定 --end-date 時）
     # XTAI 行事曆不知道颱風等臨時休市；資料商也可能尚未發布當日資料。
@@ -2094,10 +2114,14 @@ def main():
     market_close = None
     if args.regime_filter or args.residual_momentum:
         print("\n📊 下載大盤指數 (0050) 用於 regime filter...")
+        bench_gaps = []
         bench_raw = fetch_benchmark(
             '0050', days=args.days,
             start_date=args.start_date, end_date=args.end_date,
+            gap_report=bench_gaps,
         )
+        # 0050 是 regime filter 的大盤代理：缺日沒補回同樣會讓 MA60/MA20 位移
+        gap_gate(bench_gaps, bench_raw.index, allow=args.allow_gaps, what='Benchmark 0050 ')
         if len(bench_raw) > 0:
             market_close = bench_raw * bench_raw.iloc[0]
 
@@ -2253,6 +2277,11 @@ def main():
         'sell_cost': args.sell_cost,
         'hybrid_tiered': args.hybrid_tiered,
         'target_ann_vol': 0.15,
+        # 用交易所行情補回的 Yahoo 缺日（稽核用；空 list 代表沒有缺日）
+        'data_gap_fills': [
+            {k: r.get(k) for k in ('date', 'status', 'n_filled', 'n_active', 'one_sided',
+                                   'missing', 'rejected', 'sources', 'reason')}
+            for r in gap_results],
     }
     tiered_scales_log = getattr(backtester, '_tiered_scales_log', None) if args.hybrid_tiered else None
     generate_report(report_trades_df, report_equity_df, total_score, close_df, config,
