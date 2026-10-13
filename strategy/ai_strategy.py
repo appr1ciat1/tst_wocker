@@ -16,6 +16,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
+from strategy.gap_fill import repair_missing_sessions
 from strategy.data_quality import (  # noqa: F401  (re-export 供舊程式 import)
     MIN_BAR_COVERAGE,
     alert,
@@ -28,7 +29,8 @@ from strategy.data_quality import (  # noqa: F401  (re-export 供舊程式 impor
 quiet_routine_warnings()
 
 
-def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
+def fetch_panel_data(tickers, days=800, start_date=None, end_date=None,
+                     fill_gaps=True, fill_trailing=False, gap_report=None):
     """
     批次下載多檔台股的 OHLCV 日線資料。
 
@@ -42,6 +44,14 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
         明確指定起始日期（優先於 days）
     end_date : str or datetime, optional
         明確指定結束日期（預設為今天）
+
+    fill_gaps : bool
+        Yahoo 整天缺漏的交易日，改用 TWSE/TPEx 官方行情補回（預設開啟）
+    fill_trailing : bool
+        最後一根 Yahoo bar 之後的交易日也補（只能單向換算；重算過去訂單時使用）
+    gap_report : list, optional
+        傳入 list 時，補值結果（每個缺日一筆 dict）會附加進去，供呼叫端做缺日關卡。
+        （不放在 DataFrame.attrs：pandas 每次衍生 frame 都會深拷貝 attrs，回測會明顯變慢。）
 
     Returns
     -------
@@ -173,9 +183,17 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
         alert(f"丟棄 {len(dropped)} 個無有效行情的日期（休市或資料未發布）: "
               f"{', '.join(d.strftime('%Y-%m-%d') for d in dropped[-10:])}")
 
+    raw = {col: df.loc[df.index.isin(keep_idx)] for col, df in raw.items()}
+
+    # 中間缺日：Yahoo 偶爾整天沒有資料（2025-08-01、2026-10-12）。不補的話，
+    # 動能、均線、ATR 會把前後兩天接在一起算，且沒有任何警訊。改用交易所官方行情補回。
+    gap_results = []
+    last_vendor_bar = raw['Close'].index[-1] if len(raw['Close'].index) else None
+    if fill_gaps:
+        raw, gap_results = repair_missing_sessions(raw, end_dt, allow_trailing=fill_trailing)
+
     data = {}
     for col, temp_df in raw.items():
-        temp_df = temp_df.loc[temp_df.index.isin(keep_idx)]
         # Keep tradable bars raw. Forward-filling Open/High/Low/Volume creates
         # fake fills and fake liquidity on missing or suspended days. Close is
         # only used as an indicator/marking input here, so allow a one-day carry
@@ -185,6 +203,20 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None):
         else:
             data[col] = temp_df
 
+    # 最後一根 Yahoo bar 之後補上的日子（訊號日）：換算不了或無法確認的個股不可 ffill 成假的平盤價，
+    # 留空讓它當天不參與選股（例：除息日交易所標 X、沒有參考價，又沒有次日行情可反推）。
+    for r in gap_results:
+        d = pd.Timestamp(r['date'])
+        if r['status'] == 'filled' and last_vendor_bar is not None and d > last_vendor_bar:
+            bad = [c for c in r.get('rejected_codes', []) + r.get('missing', []) if c in data['Close'].columns]
+            if bad:
+                data['Close'].loc[d, bad] = np.nan
+                alert(f"{d:%Y-%m-%d} 是由交易所行情補上的最新交易日；{len(bad)} 檔無法換算，"
+                      f"當天不參與選股: {', '.join(bad)}")
+
+    # 讓呼叫端（ai_report）決定未補缺日要中止還是警告
+    if gap_report is not None:
+        gap_report.extend(gap_results)
     print(f"   ✅ 下載完成，資料範圍：{data['Close'].index[0].strftime('%Y-%m-%d')}"
           f" → {data['Close'].index[-1].strftime('%Y-%m-%d')}"
           f"，共 {len(data['Close'].columns)} 檔")

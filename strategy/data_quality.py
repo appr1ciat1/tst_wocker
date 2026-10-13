@@ -230,6 +230,28 @@ def report_reference_date(now_utc=None):
     return (now_utc + timedelta(hours=8) - timedelta(hours=12)).date()
 
 
+def unprocessed_sessions(last_processed, ref_date, calendar=None):
+    """last_processed 之後、ref_date 之前（不含 ref_date）應該已處理、卻沒有處理的交易日。
+
+    用途（漏跑警報）：
+    - 本次判定為非交易日而跳過時，若最近一個交易日尚未處理 → 回傳非空 → workflow 變紅並寄信。
+      （2026-10-08：排程被 GitHub 延遲到台灣 10/09 00:33，舊邏輯判成 10/09 補假而跳過 10/08。）
+    - 本次為交易日時，若中間有交易日被跳過（例如 GitHub 整個漏掉一次排程）→ 回傳非空 → 發警告。
+    """
+    cal = calendar or _xtai_calendar()
+    start = pd.Timestamp(last_processed).normalize() + pd.Timedelta(days=1)
+    end = pd.Timestamp(ref_date).normalize() - pd.Timedelta(days=1)
+    if end < start:
+        return []
+    return [pd.Timestamp(s).strftime('%Y-%m-%d') for s in cal.sessions_in_range(start, end)]
+
+
+def last_report_date(html):
+    """stock_report.html 的「報表日期」（最近一次處理完成的交易日）；找不到回傳 None。"""
+    m = re.search(r'報表日期: ([0-9]{4}-[0-9]{2}-[0-9]{2})', html or '')
+    return m.group(1) if m else None
+
+
 def check_data_freshness(latest_date, now_utc=None, calendar=None):
     """回傳 (is_fresh, expected_session)。無法判定（無行事曆）時視為新鮮並回傳 None。"""
     try:

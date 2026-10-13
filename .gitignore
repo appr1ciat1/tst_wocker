@@ -186,3 +186,6 @@ artifacts/sbl_cache.pkl
 artifacts/sbl_7yr_cache.pkl
 artifacts/sbl_balances_cache.pkl
 artifacts/margin_cache.pkl
+
+# 交易所行情快取（strategy/tw_quotes.py；只在 runner 上使用）
+.cache/

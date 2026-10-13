@@ -37,6 +37,14 @@ on:
         description: '行情落後於應有交易日時仍強制產生報表（預設 false＝中止，不出單）'
         required: false
         default: 'false'
+      allow_gaps:
+        description: '行情中間缺日且無法從交易所補回時仍強制產生報表（預設 false＝中止，不出單）'
+        required: false
+        default: 'false'
+      scheduled:
+        description: '外部定時服務準時觸發用：true＝套用與排程相同的交易日判定，且當天已處理過就跳過'
+        required: false
+        default: 'false'
 
 # 防止多個 run 同時 push 造成 race condition
 concurrency:
@@ -54,6 +62,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          # 取「開始執行當下」的分支最新版，而非觸發當下的 sha：外部準時觸發與 GitHub 備援排程
+          # 可能排隊先後執行，後一次必須看到前一次 commit 的報表，冪等跳過才會生效。
+          ref: ${{ github.ref }}
           # This repo contains large tracked market data. A full-history fetch can
           # exhaust the hosted runner before the job even starts.
           fetch-depth: 1
@@ -69,30 +80,59 @@ jobs:
 
       # 用 XTAI（台股）行事曆判定「今天台灣時間是否為交易日」。
       # 排程在非交易日（含週末、國定假日）會自動跳過；手動 workflow_dispatch 一律執行。
+      # 準時觸發：GitHub 排程常延遲 7~10 小時，改由外部定時服務在台灣 17:17 呼叫 workflow_dispatch
+      # （inputs.scheduled=true）。GitHub 排程保留為備援；當天已處理過的話，後到的那一次會自動跳過。
       - name: Check Taiwan trading day
         id: twcheck
+        env:
+          SCHEDULED_INPUT: ${{ github.event.inputs.scheduled }}
         run: |
           python - <<'PY'
           import os, datetime
           is_trading = True
-          if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+          missed = []
+          already = False
+          scheduled_like = (os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+                            or os.environ.get("SCHEDULED_INPUT") == "true")
+          if scheduled_like:
               try:
                   import exchange_calendars as xcals, pandas as pd
-                  from strategy.data_quality import report_reference_date
+                  from strategy.data_quality import report_reference_date, unprocessed_sessions, last_report_date
                   # 以台灣時間往回推 12 小時判定「報表所屬交易日」：排程延遲跨過台灣午夜時
                   # （例：週五的 run 拖到週六 00:30 才開始）不會被誤判成非交易日而跳過。
+                  cal = xcals.get_calendar("XTAI")
                   tw = report_reference_date()
-                  is_trading = bool(xcals.get_calendar("XTAI").is_session(pd.Timestamp(tw)))
+                  is_trading = bool(cal.is_session(pd.Timestamp(tw)))
                   print("報表參考日（台灣）", tw, "交易日?", is_trading)
+                  # 漏跑偵測：最近一次完成的報表日期之後、本參考日之前，是否有交易日沒處理到
+                  last = last_report_date(open("stock_report.html", encoding="utf-8").read())
+                  if last:
+                      missed = unprocessed_sessions(last, tw, cal)
+                      print("最近完成的報表日期", last, "→ 未處理的交易日", missed or "無")
+                  else:
+                      print("::warning::stock_report.html 找不到報表日期，無法做漏跑偵測")
+                  # 冪等：外部準時觸發與 GitHub 備援排程都會跑，同一交易日只處理一次
+                  if is_trading and last and last >= tw.isoformat():
+                      already = True
+                      is_trading = False
+                      print(f"{tw} 已處理過（報表日期 {last}），本次為重複觸發 → 跳過")
+                  if missed and is_trading:
+                      # 今天照常執行（訊號由完整歷史重算），但被跳過那天的訂單已無法自動產生
+                      print(f"::error::漏跑交易日 {', '.join(missed)}：當天訂單未產生。"
+                            f"可用「Regenerate orders」workflow 補算（signal_date 填上述日期）")
               except Exception as e:
                   print("行事曆判定失敗，預設執行:", e); is_trading = True
                   print(f"::warning::XTAI 行事曆判定失敗，預設執行: {e}")
           else:
-              print("手動觸發 → 一律執行")
+              print("手動觸發（scheduled=false）→ 一律執行")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"is_trading={'true' if is_trading else 'false'}\n")
+              # 只在「本次跳過」時用來讓 run 變紅（交易日照常執行，不影響當天部署）
+              f.write(f"missed_on_skip={','.join(missed) if (missed and not is_trading) else ''}\n")
           PY
 
+      # --fill-latest-from-exchange：Yahoo 尚未提供（或給了無效 bar）的最新交易日，改用 TWSE/TPEx 官方行情補上。
+      # 2026-10-12、10-13 Yahoo 連續兩天沒有有效日線；GitHub 驗證顯示交易所換算後價格與 Yahoo 相對誤差 < 2e-7。
       # ── 四個策略各自產報表；每份用 sed 把標題改成各自策略名（避免全顯示 v8.5 混淆）──
       # 執行順序：v8.5 → GUARD → SURGE → SURGE PRO（最後）。最後一個 ai_report 寫的
       # artifacts/orders_<date>.json 與 stock_report.html 即 paper 追蹤的對象，故 SURGE PRO 最後跑。
@@ -109,7 +149,9 @@ jobs:
             --top-k ${{ github.event.inputs.top_k || '7' }} \
             --gap-filter ${{ github.event.inputs.gap_filter || '1.5' }} \
             --start-date 2019-01-01 --eval-start 2019-01-01 \
-            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }}
+            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }} \
+            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }} \
+            --fill-latest-from-exchange
           sed -e 's#backtest_chart.png#chart_v85.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · v8.5 基準(純動量)#g' \
               stock_report.html > report_v85.html
@@ -124,7 +166,9 @@ jobs:
             --sl-atr 3.5 --regime-floor 0.0 --dynamic-topk \
             --corr-select-max 0.7 --corr-select-window 60 --corr-select-cap 2 \
             --start-date 2019-01-01 --eval-start 2019-01-01 \
-            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }}
+            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }} \
+            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }} \
+            --fill-latest-from-exchange
           # 保存 GUARD 的當日訂單（下方 SURGE PRO 那步會覆蓋 orders_<date>.json，故先複製給 GUARD paper 用）
           cp "$(ls -t artifacts/orders_2*.json | head -1)" artifacts/orders_guard_latest.json || true
           sed -e 's#backtest_chart.png#chart_guard.png#g' \
@@ -144,7 +188,9 @@ jobs:
             --strong-vix-max 25.0 --max-regime-scale 1.7 \
             --strong-tiers "0.65,20,1.45;0.75,15,1.75" \
             --start-date 2019-01-01 --eval-start 2019-01-01 \
-            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }}
+            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }} \
+            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }} \
+            --fill-latest-from-exchange
           sed -e 's#backtest_chart.png#chart_surge.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE 強勢加碼#g' \
               stock_report.html > report_surge.html
@@ -162,7 +208,9 @@ jobs:
             --strong-vix-max 28.0 --max-regime-scale 1.9 \
             --strong-tiers "0.62,18,1.7;0.72,15,1.85" \
             --start-date 2019-01-01 --eval-start 2019-01-01 \
-            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }}
+            ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }} \
+            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }} \
+            --fill-latest-from-exchange
           # report_surge_pro.html 用自己的圖檔；保留 stock_report.html + backtest_chart.png 當主報表
           sed -e 's#backtest_chart.png#chart_surge_pro.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE PRO 追最高報酬#g' \
@@ -176,15 +224,33 @@ jobs:
         if: github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.is_trading == 'true'
         run: python build_paper_page.py
 
+      # 漏跑警報：本次判定為非交易日而跳過，但最近的交易日還沒處理 → 讓 run 變紅，GitHub 會寄信。
+      # （跳過日不產生新內容，run 變紅不影響網站；交易日照常執行，只在 Annotations 顯示錯誤。）
+      - name: Missed-run alarm
+        if: always() && steps.twcheck.outputs.missed_on_skip != ''
+        run: |
+          D="${{ steps.twcheck.outputs.missed_on_skip }}"
+          echo "::error::本次排程判定為非交易日而跳過，但交易日 ${D} 尚未產生報表與訂單（排程延遲或漏跑）"
+          cat >> "$GITHUB_STEP_SUMMARY" <<MD
+          ## ❌ 漏跑交易日：${D}
+          GitHub 排程延遲或漏跑，該交易日的報表與訂單沒有產生。處置：
+          1. Actions → **AI Quant Trading Report v9** → Run workflow（補產最新報表）
+          2. Actions → **Regenerate orders for a past date (audit only)** → signal_date 填 \`${D%%,*}\`（補算當天訂單）
+          MD
+          exit 1
+
       # 失敗時在 run 摘要頁寫出判讀與處置步驟（新鮮度關卡、訂單驗證等都會讓 run 失敗）
       - name: Failure guide
-        if: failure() && github.event.schedule != '0 10 1 * *'
+        if: failure() && github.event.schedule != '0 10 1 * *' && steps.twcheck.outputs.missed_on_skip == ''
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'MD'
           ## ❌ 今日報表與訂單未產生（舊訂單與網站維持前一版）
           先看上方 Annotations 的 ❌ 訊息：
           - **行情最新日期落後於應有的交易日**：(1) 臨時休市（颱風等，XTAI 不知道）→ 不需處理；
             (2) Yahoo 尚未更新 → 稍後 Re-run，或 Run workflow 並把 `allow_stale` 設為 `true`。
+          - **行情中間缺少交易日，且無法從交易所補回**（exit 3）：Yahoo 整天缺資料，且證交所/櫃買也抓不到
+            （多半是交易所暫時擋連線）。稍後 Re-run 通常即可補回；**不要**直接用 allow_gaps 繞過，
+            否則動能、均線、ATR 會把前後兩天接在一起計算。
           - **訂單驗證失敗 / 行情欄位出現未請求的代號**：程式或資料源異常，**不要**用 allow_stale 繞過，請回報。
           MD
           echo "::error::今日報表未產生，處置方式見 run 摘要頁（Summary）"
