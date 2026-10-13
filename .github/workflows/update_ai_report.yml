@@ -131,6 +131,8 @@ jobs:
               f.write(f"missed_on_skip={','.join(missed) if (missed and not is_trading) else ''}\n")
           PY
 
+      # --fill-latest-from-exchange：Yahoo 尚未提供（或給了無效 bar）的最新交易日，改用 TWSE/TPEx 官方行情補上。
+      # 2026-10-12、10-13 Yahoo 連續兩天沒有有效日線；GitHub 驗證顯示交易所換算後價格與 Yahoo 相對誤差 < 2e-7。
       # ── 四個策略各自產報表；每份用 sed 把標題改成各自策略名（避免全顯示 v8.5 混淆）──
       # 執行順序：v8.5 → GUARD → SURGE → SURGE PRO（最後）。最後一個 ai_report 寫的
       # artifacts/orders_<date>.json 與 stock_report.html 即 paper 追蹤的對象，故 SURGE PRO 最後跑。
@@ -148,7 +150,8 @@ jobs:
             --gap-filter ${{ github.event.inputs.gap_filter || '1.5' }} \
             --start-date 2019-01-01 --eval-start 2019-01-01 \
             ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }} \
-            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }}
+            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }} \
+            --fill-latest-from-exchange
           sed -e 's#backtest_chart.png#chart_v85.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · v8.5 基準(純動量)#g' \
               stock_report.html > report_v85.html
@@ -164,7 +167,8 @@ jobs:
             --corr-select-max 0.7 --corr-select-window 60 --corr-select-cap 2 \
             --start-date 2019-01-01 --eval-start 2019-01-01 \
             ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }} \
-            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }}
+            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }} \
+            --fill-latest-from-exchange
           # 保存 GUARD 的當日訂單（下方 SURGE PRO 那步會覆蓋 orders_<date>.json，故先複製給 GUARD paper 用）
           cp "$(ls -t artifacts/orders_2*.json | head -1)" artifacts/orders_guard_latest.json || true
           sed -e 's#backtest_chart.png#chart_guard.png#g' \
@@ -185,7 +189,8 @@ jobs:
             --strong-tiers "0.65,20,1.45;0.75,15,1.75" \
             --start-date 2019-01-01 --eval-start 2019-01-01 \
             ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }} \
-            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }}
+            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }} \
+            --fill-latest-from-exchange
           sed -e 's#backtest_chart.png#chart_surge.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE 強勢加碼#g' \
               stock_report.html > report_surge.html
@@ -204,7 +209,8 @@ jobs:
             --strong-tiers "0.62,18,1.7;0.72,15,1.85" \
             --start-date 2019-01-01 --eval-start 2019-01-01 \
             ${{ github.event.inputs.allow_stale == 'true' && '--allow-stale' || '' }} \
-            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }}
+            ${{ github.event.inputs.allow_gaps == 'true' && '--allow-gaps' || '' }} \
+            --fill-latest-from-exchange
           # report_surge_pro.html 用自己的圖檔；保留 stock_report.html + backtest_chart.png 當主報表
           sed -e 's#backtest_chart.png#chart_surge_pro.png#g' \
               -e 's#AI 台股量化交易 v8\.5#AI 台股量化交易 · SURGE PRO 追最高報酬#g' \

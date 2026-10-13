@@ -120,7 +120,7 @@ def fill_gaps(raw, gaps, get_quotes, allow_trailing=False, tol=FACTOR_TOL,
 
     for g in gaps:
         res = {'date': g.strftime('%Y-%m-%d'), 'n_filled': 0, 'n_active': 0,
-               'one_sided': 0, 'rejected': [], 'missing': [], 'no_trade': [],
+               'one_sided': 0, 'rejected': [], 'rejected_codes': [], 'missing': [], 'no_trade': [],
                'sources': {}, 'notes': []}
         st = statuses[g]
         if st == 'skipped_trailing':
@@ -178,6 +178,7 @@ def fill_gaps(raw, gaps, get_quotes, allow_trailing=False, tol=FACTOR_TOL,
             q = qg.loc[code]
             if not _prices_ok(q):
                 res['rejected'].append(f'{code}(行情不自洽)')
+                res['rejected_codes'].append(code)
                 continue
             k_f = c_p / q['ref'] if _ref_ok(q) else None
             k_b = None
@@ -192,10 +193,12 @@ def fill_gaps(raw, gaps, get_quotes, allow_trailing=False, tol=FACTOR_TOL,
                     k_b = val / q['close']
             if k_f is not None and k_b is not None and abs(k_f / k_b - 1) > tol:
                 res['rejected'].append(f'{code}(前後換算不一致 {k_f:.4f}/{k_b:.4f})')
+                res['rejected_codes'].append(code)
                 continue
             k = k_f if k_f is not None else k_b
             if k is None:
                 res['rejected'].append(f'{code}(參考價不可用且無法反向換算)')
+                res['rejected_codes'].append(code)
                 continue
             if k_f is None or k_b is None:
                 res['one_sided'] += 1

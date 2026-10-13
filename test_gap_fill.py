@@ -433,3 +433,63 @@ def test_circuit_breaker_stops_hammering_a_blocked_host(monkeypatch, tmp_path):
     # 別的主機不受影響
     with pytest.raises(urllib.error.URLError):
         TQ._http_get_json(TQ.TPEX_URLS[0].format(y=2026, m='10', d='12', roc=115))
+
+
+def test_truncated_response_is_retried_and_gzip_is_decoded(monkeypatch):
+    import gzip as _gz
+    import http.client
+    import json as _json
+    calls = []
+
+    class Resp:
+        def __init__(self, body):
+            self.body = body
+            self.headers = {'Content-Encoding': 'gzip'}
+        def read(self):
+            return self.body
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def flaky(req, context=None, timeout=60):
+        calls.append(1)
+        if len(calls) == 1:
+            raise http.client.IncompleteRead(b'partial', 100)
+        return Resp(_gz.compress(_json.dumps({'stat': 'OK'}).encode()))
+
+    monkeypatch.setattr(TQ.urllib.request, 'urlopen', flaky)
+    monkeypatch.setattr(TQ.time, 'sleep', lambda s: None)
+    monkeypatch.setattr(TQ, '_fail_streak', {})
+    assert TQ._http_get_json('https://www.tpex.org.tw/x') == {'stat': 'OK'} and len(calls) == 2
+
+
+def test_latest_filled_day_excludes_unconvertible_ticker(monkeypatch):
+    """尾端補值日（訊號日）換算不了的個股：留空、當天不參與選股，不可 ffill 成假平盤。"""
+    raw, refs, yahoo = _market()
+    last = pd.Timestamp(SESSIONS[-1])
+    refs = refs.copy()
+    refs.at[last, '2603'] = np.nan            # 除息標 X：沒有參考價，也沒有次日可反推
+    codes = ['2330', '2603']
+
+    def fake_download(symbols, start=None, end=None, progress=False, **kw):
+        symbols = [symbols] if isinstance(symbols, str) else list(symbols)
+        cols = pd.MultiIndex.from_product([['Close', 'Open', 'High', 'Low', 'Volume'], symbols])
+        df = pd.DataFrame(index=yahoo['Close'].index.drop(last), columns=cols, dtype=float)
+        for sym in symbols:
+            if sym.endswith('.TW'):
+                for f in ['Close', 'Open', 'High', 'Low', 'Volume']:
+                    df[(f, sym)] = yahoo[f][sym.split('.')[0]].drop(last).values
+        return df
+
+    import exchange_calendars as xcals
+    monkeypatch.setattr(S.yf, 'download', fake_download)
+    monkeypatch.setattr(xcals, 'get_calendar', lambda name: FakeCal(SESSIONS))
+    monkeypatch.setattr(TQ, 'fetch_day', lambda d, c: _quotes_fn(raw, refs)(d))
+    monkeypatch.setattr(GF, 'expected_latest_session', lambda **kw: last)
+    rep = []
+    close, *_ = S.fetch_panel_data(codes, start_date='2026-09-01', end_date='2026-10-14',
+                                   fill_trailing=True, gap_report=rep)
+    assert close.index[-1] == last
+    assert np.isnan(close.at[last, '2603'])
+    np.testing.assert_allclose(close.at[last, '2330'], yahoo['Close'].at[last, '2330'], rtol=1e-9)

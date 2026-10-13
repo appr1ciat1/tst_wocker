@@ -11,6 +11,8 @@ strategy.tw_quotes — 交易所官方日行情（TWSE 上市、TPEx 上櫃）
 本模組只負責抓取與解析；所有判斷邏輯放在 gap_fill（可離線測試）。
 """
 
+import gzip
+import http.client
 import json
 import os
 import re
@@ -40,7 +42,7 @@ _CTX = ssl.create_default_context()
 _CTX.verify_flags &= ~ssl.VERIFY_X509_STRICT
 
 REQUEST_PAUSE = float(os.environ.get('TW_QUOTE_PAUSE', '3.0'))
-_RETRY_WAITS = (8, 25)
+_RETRY_WAITS = (5, 15, 30)
 _RETRY_CODES = {307, 403, 429, 500, 502, 503, 504}
 _last_request = [0.0]
 
@@ -208,7 +210,7 @@ def _is_transport_failure(e):
     if isinstance(e, urllib.error.HTTPError):
         return e.code in _RETRY_CODES
     # TWSE 封鎖時以 307 轉址到 HTML 擋頁，urllib 會跟隨轉址 → 解析 JSON 失敗，也算連線層失敗
-    return isinstance(e, (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError))
+    return isinstance(e, _TRANSIENT + (OSError,))
 
 
 def _http_get_json(url, timeout=60):
@@ -238,18 +240,28 @@ def _http_get_json_retry(url, timeout=60):
             time.sleep(REQUEST_PAUSE - gap)
         _last_request[0] = time.time()
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'tst-wocker/1.0'})
+            # gzip：TPEx 全市場回應約 2MB，GitHub runner 上常被截斷（IncompleteRead）；壓縮後約 1/6
+            req = urllib.request.Request(url, headers={'User-Agent': 'tst-wocker/1.0',
+                                                       'Accept-Encoding': 'gzip'})
             with urllib.request.urlopen(req, context=_CTX, timeout=timeout) as resp:
-                return json.loads(resp.read().decode('utf-8'))
+                body = resp.read()
+                if (resp.headers.get('Content-Encoding') or '').lower() == 'gzip':
+                    body = gzip.decompress(body)
+                return json.loads(body.decode('utf-8'))
         except urllib.error.HTTPError as e:
             last = e
             if e.code in _RETRY_CODES:
                 continue
             raise
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        except _TRANSIENT as e:
             last = e
             continue
     raise last
+
+
+# 暫時性錯誤：重試。IncompleteRead（回應被截斷）在 2026-10-13 的 GitHub 驗證中實際發生多次。
+_TRANSIENT = (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException,
+              json.JSONDecodeError, EOFError, gzip.BadGzipFile)
 
 
 _get_json = _http_get_json      # 測試以 monkeypatch 取代此名稱

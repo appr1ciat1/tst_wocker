@@ -335,6 +335,7 @@ def test_workflow_guards_are_wired():
     assert len(report_steps) == 4
     assert all('--allow-stale' in s['run'] for s in report_steps)
     assert all('--allow-gaps' in s['run'] for s in report_steps)
+    assert all('--fill-latest-from-exchange' in s['run'] for s in report_steps)
     upload = next(s for s in steps if s.get('uses', '').startswith('actions/upload-artifact'))
     assert 'orders_*.json' in upload['with']['path']
     assert 'always()' in upload['if']

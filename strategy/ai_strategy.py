@@ -188,6 +188,7 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None,
     # 中間缺日：Yahoo 偶爾整天沒有資料（2025-08-01、2026-10-12）。不補的話，
     # 動能、均線、ATR 會把前後兩天接在一起算，且沒有任何警訊。改用交易所官方行情補回。
     gap_results = []
+    last_vendor_bar = raw['Close'].index[-1] if len(raw['Close'].index) else None
     if fill_gaps:
         raw, gap_results = repair_missing_sessions(raw, end_dt, allow_trailing=fill_trailing)
 
@@ -201,6 +202,17 @@ def fetch_panel_data(tickers, days=800, start_date=None, end_date=None,
             data[col] = temp_df.ffill(limit=1)
         else:
             data[col] = temp_df
+
+    # 最後一根 Yahoo bar 之後補上的日子（訊號日）：換算不了或無法確認的個股不可 ffill 成假的平盤價，
+    # 留空讓它當天不參與選股（例：除息日交易所標 X、沒有參考價，又沒有次日行情可反推）。
+    for r in gap_results:
+        d = pd.Timestamp(r['date'])
+        if r['status'] == 'filled' and last_vendor_bar is not None and d > last_vendor_bar:
+            bad = [c for c in r.get('rejected_codes', []) + r.get('missing', []) if c in data['Close'].columns]
+            if bad:
+                data['Close'].loc[d, bad] = np.nan
+                alert(f"{d:%Y-%m-%d} 是由交易所行情補上的最新交易日；{len(bad)} 檔無法換算，"
+                      f"當天不參與選股: {', '.join(bad)}")
 
     # 讓呼叫端（ai_report）決定未補缺日要中止還是警告
     if gap_report is not None:
