@@ -493,3 +493,29 @@ def test_latest_filled_day_excludes_unconvertible_ticker(monkeypatch):
     assert close.index[-1] == last
     assert np.isnan(close.at[last, '2603'])
     np.testing.assert_allclose(close.at[last, '2330'], yahoo['Close'].at[last, '2330'], rtol=1e-9)
+
+
+def test_twt49u_reference_prices_match_yahoo_adjustment():
+    """2026-10-13 GitHub 實測回應：除息日 MI_INDEX 標 X，參考價改由 TWT49U 計算。"""
+    pl = {'stat': 'OK', 'fields': ['資料日期', '股票代號', '股票名稱', '除權息前收盤價', '除權息參考價', '權值+息值',
+                                   '權/息', '漲停價格', '跌停價格', '開盤競價基準', '減除股利參考價'],
+          'data': [['114年06月12日', '2330', '台積電', '1,065.00', '1,060.49', '4.500020', '息', '1', '1', '1', '1'],
+                   ['114年06月12日', '9999', 'x', '50.00', '45.00', '0.5', '權息', '1', '1', '1', '1'],
+                   ['114年06月11日', '1111', 'x', '50.00', '49.00', '1.0', '息', '1', '1', '1', '1']]}
+    refs = TQ.parse_twt49u(pl, '20250612')
+    assert refs == {'2330': pytest.approx(1060.49998), '9999': 45.0}
+    assert TQ.parse_twt49u({'stat': '很抱歉，沒有符合條件的資料!'}, '20250613') == {}
+
+
+def test_fetch_twse_fills_x_rows_from_twt49u(monkeypatch):
+    def fake_get(url, timeout=60):
+        if 'TWT49U' in url:
+            return {'stat': 'OK', 'fields': ['資料日期', '股票代號', '股票名稱', '除權息前收盤價', '除權息參考價',
+                                             '權值+息值', '權/息'],
+                    'data': [['114年06月12日', '2330', 'x', '1,065.00', '1,060.49', '4.500020', '息']]}
+        return {'stat': 'OK', 'date': '20250612', 'tables': [{'fields': TWSE_FIELDS, 'data': [
+            _twse_row('2330', '28,661,875', '1,055.00', '1,060.00', '1,045.00', '1,045.00', '<p>X</p>', '0.00')]}]}
+
+    monkeypatch.setattr(TQ, '_get_json', fake_get)
+    df = TQ.fetch_twse('2025-06-12')
+    assert df.at['2330', 'ref'] == pytest.approx(1060.49998)

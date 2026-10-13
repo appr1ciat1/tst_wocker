@@ -2118,7 +2118,7 @@ def main():
         bench_raw = fetch_benchmark(
             '0050', days=args.days,
             start_date=args.start_date, end_date=args.end_date,
-            gap_report=bench_gaps,
+            gap_report=bench_gaps, fill_trailing=args.fill_latest_from_exchange,
         )
         # 0050 是 regime filter 的大盤代理：缺日沒補回同樣會讓 MA60/MA20 位移
         gap_gate(bench_gaps, bench_raw.index, allow=args.allow_gaps, what='Benchmark 0050 ')
@@ -2249,10 +2249,12 @@ def main():
     benchmark_equity = fetch_benchmark(
         '0050', days=args.days,
         start_date=benchmark_start, end_date=args.end_date,
+        fill_trailing=args.fill_latest_from_exchange,
     )
     benchmark2_equity = fetch_benchmark(
         '00981A', days=args.days,
         start_date=benchmark_start, end_date=args.end_date,
+        fill_trailing=args.fill_latest_from_exchange,
     )
     ew_equity = equal_weight_benchmark(close_df)
     if benchmark_start:

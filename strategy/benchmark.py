@@ -21,7 +21,7 @@ quiet_routine_warnings()
 
 
 def fetch_benchmark(ticker='0050', days=800, start_date=None, end_date=None, fill_gaps=True,
-                    gap_report=None):
+                    gap_report=None, fill_trailing=False):
     """
     下載 Benchmark 的每日收盤價。
 
@@ -79,7 +79,8 @@ def fetch_benchmark(ticker='0050', days=800, start_date=None, end_date=None, fil
         close.index = pd.DatetimeIndex(close.index).tz_localize(None).normalize()
         # 單一標的：交易所查無 = 該標的當天停牌（例：0050 分割 2025-06-11~17），不是資料缺漏
         raw, results = repair_missing_sessions({'Close': close.to_frame(str(ticker))}, end_dt,
-                                               label=f'Benchmark {ticker}', min_coverage=0.0)
+                                               label=f'Benchmark {ticker}', min_coverage=0.0,
+                                               allow_trailing=fill_trailing)
         close = raw['Close'][str(ticker)].dropna()
         if gap_report is not None:
             gap_report.extend(results)

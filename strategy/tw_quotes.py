@@ -315,9 +315,58 @@ def _fetch_cached(source, ymd, fetch, cache_no_data):
 
 def fetch_twse(date, cache_no_data=True):
     ymd = pd.Timestamp(date).strftime('%Y%m%d')
-    return _fetch_cached('twse', ymd,
-                         lambda: parse_twse(_get_json(TWSE_URL.format(ymd=ymd)), ymd),
-                         cache_no_data)
+
+    def fetch():
+        df = parse_twse(_get_json(TWSE_URL.format(ymd=ymd)), ymd)
+        # 除權息當天 MI_INDEX 的漲跌欄標「X」、沒有參考價 → 改查 TWT49U（除權除息計算結果表）
+        if df['ref'].isna().any():
+            try:
+                refs = parse_twt49u(_get_json(TWT49U_URL.format(ymd=ymd)), ymd)
+                hit = [c for c in df.index[df['ref'].isna()] if c in refs]
+                df.loc[hit, 'ref'] = [refs[c] for c in hit]
+            except Exception:
+                pass            # 查不到 → 參考價維持未知，由反向換算或拒收處理
+        return df
+
+    return _fetch_cached('twse', ymd, fetch, cache_no_data)
+
+
+TWT49U_URL = ("https://www.twse.com.tw/rwd/zh/exRight/TWT49U"
+              "?startDate={ymd}&endDate={ymd}&response=json")
+
+
+def parse_twt49u(payload, ymd):
+    """TWT49U（除權除息計算結果表）→ {代號: 參考價}。
+
+    純除息（權/息 = 息）：參考價 = 除權息前收盤價 − 息值。這正是 Yahoo 還原的比例
+    （1 − 股利 / 前收），且比表上截位到 0.01 的「減除股利參考價」精確。
+    含除權：用表上的「除權息參考價」。
+    2026-10-13 GitHub 驗證：2330 2025-06-12 → 1065 − 4.50002 = 1060.49998（表上 1,060.49）。
+    """
+    stat = str(payload.get('stat', ''))
+    if stat.upper() != 'OK':
+        if '沒有符合條件' in stat or '查無' in stat:
+            return {}
+        raise RuntimeError(f'TWT49U {ymd} 異常回應: {stat}')
+    f = payload.get('fields') or []
+    i_date, i_code = _col(f, '資料日期'), _col(f, '股票代號')
+    i_prev, i_ref = _col(f, '除權息前收盤價'), _col(f, '除權息參考價')
+    i_val, i_kind = _col(f, '權值+息值'), _col(f, '權/息')
+    if None in (i_date, i_code, i_prev, i_ref, i_val, i_kind):
+        raise ValueError(f'TWT49U 欄位無法辨識: {f}')
+    out = {}
+    for r in payload.get('data') or []:
+        p = re.findall(r'\d+', str(r[i_date]))
+        if len(p) != 3 or f'{int(p[0]) + 1911:04d}{int(p[1]):02d}{int(p[2]):02d}' != ymd:
+            continue
+        code = str(r[i_code]).strip()
+        if _strip_tags(r[i_kind]) == '息':
+            ref = _num(r[i_prev]) - _num(r[i_val])
+        else:
+            ref = _num(r[i_ref])
+        if np.isfinite(ref) and ref > 0:
+            out[code] = ref
+    return out
 
 
 def fetch_tpex(date, cache_no_data=True):
