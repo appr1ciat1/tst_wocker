@@ -1,0 +1,141 @@
+{
+  "created_at": "2026-10-14T09:21:26.256971",
+  "strategy_version": "v8.5",
+  "git_sha": "ea05c6e9e4476897ae0c81fca0e132c123b18c7d",
+  "report_date": "2026-10-14",
+  "config": {
+    "tp_pct": 0.15,
+    "sl_pct": 0.08,
+    "max_hold_days": 22,
+    "initial_capital": 200000,
+    "threshold": 2.0,
+    "tp_sl_mode": "atr",
+    "tp_atr_mult": 4.0,
+    "sl_atr_mult": 3.5,
+    "trailing_stop": false,
+    "trailing_atr_mult": 2.0,
+    "top_k": 7,
+    "buy_cost": 0.001425,
+    "sell_cost": 0.004425,
+    "hybrid_tiered": false,
+    "target_ann_vol": 0.15,
+    "data_gap_fills": [
+      {
+        "date": "2019-09-09",
+        "status": "filled",
+        "n_filled": 113,
+        "n_active": 113,
+        "one_sided": 0,
+        "missing": [],
+        "rejected": [],
+        "sources": {
+          "TWSE": 108,
+          "TPEx": 5
+        },
+        "reason": null
+      },
+      {
+        "date": "2021-04-06",
+        "status": "filled",
+        "n_filled": 113,
+        "n_active": 114,
+        "one_sided": 0,
+        "missing": [],
+        "rejected": [],
+        "sources": {
+          "TWSE": 108,
+          "TPEx": 5
+        },
+        "reason": null
+      },
+      {
+        "date": "2021-08-17",
+        "status": "filled",
+        "n_filled": 113,
+        "n_active": 114,
+        "one_sided": 0,
+        "missing": [],
+        "rejected": [],
+        "sources": {
+          "TWSE": 108,
+          "TPEx": 5
+        },
+        "reason": null
+      },
+      {
+        "date": "2022-02-04",
+        "status": "closed",
+        "n_filled": 0,
+        "n_active": 0,
+        "one_sided": 0,
+        "missing": [],
+        "rejected": [],
+        "sources": {},
+        "reason": null
+      },
+      {
+        "date": "2023-01-18",
+        "status": "closed",
+        "n_filled": 0,
+        "n_active": 0,
+        "one_sided": 0,
+        "missing": [],
+        "rejected": [],
+        "sources": {},
+        "reason": null
+      },
+      {
+        "date": "2024-10-31",
+        "status": "closed",
+        "n_filled": 0,
+        "n_active": 0,
+        "one_sided": 0,
+        "missing": [],
+        "rejected": [],
+        "sources": {},
+        "reason": null
+      },
+      {
+        "date": "2025-08-01",
+        "status": "filled",
+        "n_filled": 114,
+        "n_active": 114,
+        "one_sided": 0,
+        "missing": [],
+        "rejected": [],
+        "sources": {
+          "TWSE": 110,
+          "TPEx": 4
+        },
+        "reason": null
+      },
+      {
+        "date": "2026-07-10",
+        "status": "closed",
+        "n_filled": 0,
+        "n_active": 0,
+        "one_sided": 0,
+        "missing": [],
+        "rejected": [],
+        "sources": {},
+        "reason": null
+      }
+    ]
+  },
+  "metrics": {
+    "total_return": 12.68218176024916,
+    "ann_return": 0.4339688620326614,
+    "sharpe": 1.4740734698778253,
+    "geometric_sharpe": 1.6102977967021994,
+    "sortino": 2.0845130724922627,
+    "calmar": 1.4083816450194182,
+    "max_drawdown_pct": -0.30813300043162517,
+    "total_trades": 873
+  },
+  "artifacts": {
+    "equity": "artifacts/equity_20261014.csv",
+    "trades": "artifacts/trades_20261014.csv",
+    "signals": "artifacts/signals_20261014.csv",
+    "orders": "artifacts/orders_20261014.json"
+  }
+}

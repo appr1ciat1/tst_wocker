@@ -1,0 +1,13 @@
+{
+  "first_date": "2019-01-02",
+  "last_date": "2026-10-14",
+  "rows": 1889,
+  "tickers": 116,
+  "sha256": {
+    "open": "02bf0be13e66d6d3a5b5fc40d5286013210e8d8353d3414cfdbc086bd8ba3adb",
+    "high": "28e7d5cd7042848d1fa4e2f56d6f64fd210a8aac45b8cd38ced83093dba6e7a5",
+    "low": "4feecd188c02d892a02bfb6dd7994fa697f9e546003f1bdecba313ad37210851",
+    "close": "e9338ad1b48154d67be11089cbf9c9c4e4ec1f6d498a4e267cf81cf5a120cb4d",
+    "volume": "6dfabc8a9ee7274e924845b3fe1380efd67ac4518cbc9ee1cfb974a7155a02f5"
+  }
+}
