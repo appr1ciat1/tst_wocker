@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 台股量化交易 — 策略選單</title>
+    <style>
+        body { font-family: system-ui, "Noto Sans TC", sans-serif; background: #0f172a;
+               color: #e2e8f0; margin: 0; padding: 32px 16px; }
+        .wrap { max-width: 880px; margin: 0 auto; }
+        h1 { font-size: 1.6rem; margin: 0 0 4px; }
+        .sub { color: #94a3b8; margin: 0 0 28px; font-size: .95rem; }
+        .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+        a.card { display: block; text-decoration: none; color: inherit; background: #1e293b;
+                 border: 1px solid #334155; border-radius: 14px; padding: 18px 20px;
+                 transition: transform .12s, border-color .12s; }
+        a.card:hover { transform: translateY(-2px); border-color: #60a5fa; }
+        .tag { font-size: .72rem; font-weight: 700; letter-spacing: .04em; padding: 2px 8px;
+               border-radius: 999px; display: inline-block; margin-bottom: 8px; }
+        .surgepro { background: #4c0519; color: #fda4af; }
+        .surge { background: #422006; color: #fdba74; }
+        .guard { background: #052e2b; color: #5eead4; }
+        .base  { background: #1e1b4b; color: #a5b4fc; }
+        .paper { background: #3f1d38; color: #f0abfc; }
+        .name { font-size: 1.15rem; font-weight: 700; margin: 0 0 6px; }
+        .desc { color: #cbd5e1; font-size: .9rem; margin: 0 0 10px; }
+        .stat { color: #94a3b8; font-size: .82rem; font-variant-numeric: tabular-nums; }
+        .stat b { color: #e2e8f0; }
+        footer { color: #64748b; font-size: .78rem; margin-top: 28px; text-align: center; }
+        .guide { background:#1e293b; border:1px solid #334155; border-radius:14px; padding:16px 20px; margin-top:20px; }
+        .guide h2 { font-size:1.12rem; margin:0 0 4px; }
+        .guide .gsub { color:#94a3b8; font-size:.85rem; margin:0 0 10px; }
+        .guide table { width:100%; border-collapse:collapse; font-size:.86rem; }
+        .guide th,.guide td { text-align:left; padding:7px 8px; border-bottom:1px solid #283449; }
+        .guide th { color:#94a3b8; font-weight:600; }
+        .guide .verdict { color:#cbd5e1; font-size:.88rem; margin:12px 0 0; line-height:1.65; }
+    </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>AI 台股量化交易</h1>
+    <p class="sub">四個正式策略：v8.5 基準 + 約束優化後的 GUARD / SURGE / SURGE PRO。每日收盤後自動更新。</p>
+    <div class="grid">
+      <a class="card" href="report_surge_pro.html">
+        <span class="tag surgepro">SURGE PRO · 追最高報酬</span>
+        <p class="name">mom_surge_pro</p>
+        <p class="desc">SURGE 去風險不變 + 更激進分段加碼（弱 0% / 強 12.5% / 更強 17% / 最強 18.5%）。報酬最高，2022 較弱。📈 Paper 模擬追蹤此策略。</p>
+        <p class="stat">全期 年化 <b>67.1%</b> · MDD <b>-22.7%</b> · Calmar <b>2.96</b></p>
+      </a>
+      <a class="card" href="report_surge.html">
+        <span class="tag surge">SURGE · 追報酬</span>
+        <p class="name">mom_surge</p>
+        <p class="desc">去風險 + 分段強勢加碼（弱 0% / 強 12.5% / 更強 14.5% / 最強 17%）。</p>
+        <p class="stat">全期 年化 <b>58.8%</b> · MDD <b>-21.5%</b> · Calmar <b>2.73</b></p>
+      </a>
+      <a class="card" href="report_guard.html">
+        <span class="tag guard">GUARD · 最穩健</span>
+        <p class="name">mom_guard</p>
+        <p class="desc">v8.5 + 弱勢去風險（最弱全出 + breadth + 放寬停損）+ 相關性分散選股（同聚落 ≤2 檔），不加碼。</p>
+        <p class="stat">全期 年化 <b>51.6%</b> · MDD <b>-26.8%</b> · Calmar <b>1.93</b></p>
+      </a>
+      <a class="card" href="report_v85.html">
+        <span class="tag base">v8.5 · 基準</span>
+        <p class="name">v8.5 baseline</p>
+        <p class="desc">純動量 v8.5（binary regime，無去風險 / 無加碼）+ 當日信號 / 籌碼 / 新聞標注。優化前基準。</p>
+        <p class="stat">全期 年化 <b>40.2%</b> · MDD <b>-41.1%</b> · Calmar <b>0.98</b></p>
+      </a>
+      <a class="card" href="paper_trading.html">
+        <span class="tag paper">Paper · SURGE PRO</span>
+        <p class="name">paper_trading</p>
+        <p class="desc">模擬交易追蹤 —— 追蹤 <b style="color:#fda4af">SURGE PRO</b>（最高報酬）的當日買賣訊號、近兩個月績效。標的可點擊跳 Yahoo Finance。</p>
+        <p class="stat">每日更新</p>
+      </a>
+      <a class="card" href="paper_trading_guard.html">
+        <span class="tag guard">Paper · GUARD</span>
+        <p class="name">paper_trading_guard</p>
+        <p class="desc">模擬交易追蹤 —— 追蹤 <b style="color:#5eead4">GUARD</b>（最穩健·相關性分散）的當日買賣訊號、近兩個月績效。標的可點擊跳 Yahoo Finance。</p>
+        <p class="stat">每日更新</p>
+      </a>
+    </div>
+    <div class="guide">
+      <h2>📌 選哪個策略？（依市場情境）</h2>
+      <p class="gsub">四策略<b>選股訊號與弱勢去風險邏輯完全相同</b>，差別只在「強勢時加碼的積極度」與「進場挑剔度」。</p>
+      <table>
+        <tr><th>市場情境</th><th>最適策略</th><th>原因</th></tr>
+        <tr><td>🚀 強勢延續多頭、VIX 低、龍頭領漲</td><td><b style="color:#fda4af">SURGE PRO</b></td><td>激進分段加碼，最大化報酬</td></tr>
+        <tr><td>📈 漲跌互現、長期向上的波段</td><td><b style="color:#fdba74">SURGE</b></td><td>去風險＋適度加碼，最佳平衡</td></tr>
+        <tr><td>🌊 廣泛齊漲（雨露均霑）</td><td><b style="color:#5eead4">GUARD</b> / <b style="color:#a5b4fc">v8.5</b></td><td>分散／滿倉廣泛參與勝過集中</td></tr>
+        <tr><td>〽️ 震盪盤整、方向不明</td><td><b style="color:#5eead4">GUARD</b> / <b style="color:#fdba74">SURGE</b></td><td>graduated 弱勢自動減碼保護</td></tr>
+        <tr><td>💥 升息／系統性崩盤（如 2022）</td><td><b style="color:#fdba74">SURGE</b>（最防守）</td><td>去風險＋不過度集中，崩盤年 OOS 最佳</td></tr>
+      </table>
+      <p class="verdict">全期 2019–2026 數字 <b style="color:#fda4af">SURGE PRO</b> 最強（年化／Sharpe／Calmar／PBO 皆居首）；全天候平衡 <b style="color:#fdba74">SURGE</b> 最佳（回撤最淺 −21.5%、崩盤抗跌最好）。<b>要榨乾回測優勢且能扛崩盤 → SURGE PRO；務實怕崩盤 → SURGE。</b>GUARD 多被 SURGE 支配，價值在「最單純、不依賴加碼判斷」。</p>
+    </div>
+    <footer>數字為 2019–2026 凍結回測（動態 Top-60），非未來保證。SURGE/GUARD 詳見 artifacts/v85_optimization_result.md。</footer>
+  </div>
+</body>
+</html>
