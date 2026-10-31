@@ -1,0 +1,31 @@
+name: Watch data sources
+
+# 法人籌碼資料源（tw-institutional-stocker）停更看門狗。停更 ≥ 2 個交易日就讓這個 run 變紅，GitHub 會寄信。
+# 獨立成一個 workflow：失敗不會影響每日報表與網站部署（deploy_pages 只看 AI Quant Trading Report v9）。
+on:
+  schedule:
+    - cron: '23 12 * * 1-5'   # UTC 12:23 = 台灣 20:23（資料源排程 18:00，留緩衝）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inst-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            tools
+            strategy
+            inst_widget.py
+            requirements.txt
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install dependencies
+        run: pip install pandas exchange_calendars
+      - name: Check tw-institutional-stocker freshness
+        run: python tools/check_inst_source.py

@@ -31,6 +31,7 @@ def build_inst_widget(base_url: str = INST_DATA_BASE) -> str:
     資料源：<a href="https://appr1ciat1.github.io/tw-institutional-stocker/" target="_blank" rel="noopener">tw-institutional-stocker</a>
     <span id="lchipAsof"></span>
   </p>
+  <p class="lchip-stale" id="lchipStale" hidden></p>
   <div class="lchip-controls">
     <label>類別
       <select id="lchipCat">
@@ -87,6 +88,8 @@ def build_inst_widget(base_url: str = INST_DATA_BASE) -> str:
   margin-right:6px;font-family:monospace;font-size:.8rem;color:#9cf;}
 .lchip-pos{color:#26de81;font-weight:600;}
 .lchip-neg{color:#ff6b6b;font-weight:600;}
+.lchip-stale{margin:0 0 12px;padding:8px 12px;border-radius:6px;font-size:.88rem;font-weight:600;
+  color:#fff;background:#b3261e;}
 </style>
 
 <script>
@@ -120,6 +123,33 @@ def build_inst_widget(base_url: str = INST_DATA_BASE) -> str:
                      ["佔股本%", function(r){return pct(r.pct_cap)+"%";}]]
   };
 
+  // 停更偵測：資料日之後到「昨天」（台北時間）之間有幾個平日。≥2 就醒目警告。
+  // 只算週一到週五，不知道國定假日，所以文字寫「約」；寧可多警告，不可默默顯示舊資料。
+  // 2026-10-14 起資料源（fork）的 GitHub Actions 被 GitHub 停用，本 widget 兩週顯示舊資料而無任何提示。
+  function staleWeekdays(dateStr){
+    var today = new Date().toLocaleDateString("sv-SE", {timeZone: "Asia/Taipei"});
+    var d = new Date(dateStr + "T00:00:00Z"), t = new Date(today + "T00:00:00Z");
+    if(isNaN(d) || isNaN(t)){ return 0; }
+    var n = 0;
+    for(var x = new Date(d.getTime() + 864e5); x < t; x = new Date(x.getTime() + 864e5)){
+      var w = x.getUTCDay(); if(w !== 0 && w !== 6){ n++; }
+    }
+    return n;
+  }
+  // gap：主力（分點）視窗內缺資料的交易日。分點是每日快照、事後無法回補，只能如實標出。
+  function showStale(dateStr, gap){
+    var el = $("lchipStale"), n = dateStr ? staleWeekdays(dateStr) : 0;
+    if(n >= 2){
+      el.textContent = "⚠ 資料已停更：最新資料日 " + dateStr + "，之後約 " + n +
+        " 個交易日沒有更新。排行並非最新，請勿依此判斷；資料源 tw-institutional-stocker 需要修復。";
+      el.hidden = false;
+    } else if(gap && gap.length){
+      el.textContent = "⚠ 此 " + win + " 日視窗缺 " + gap.length + " 個交易日的分點資料（" +
+        gap.join("、") + "），累計值只含有資料的日子，偏小。";
+      el.hidden = false;
+    } else { el.hidden = true; }
+  }
+
   function fetchJson(url){
     return fetch(url).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); });
   }
@@ -130,7 +160,8 @@ def build_inst_widget(base_url: str = INST_DATA_BASE) -> str:
         var arr = (d.windows && d.windows[win]) ? d.windows[win].slice() : [];
         if(dir === "down"){ arr.reverse(); }
         arr = arr.filter(function(r){ return dir==="up" ? r.net_lots>0 : r.net_lots<0; });
-        return { rows: arr, date: d.date };
+        var meta = (d.window_meta && d.window_meta[win]) ? d.window_meta[win] : null;
+        return { rows: arr, date: d.date, gap: meta ? (meta.missing || []) : [] };
       });
     }
     var file = (cat === "three_inst_net")
@@ -153,6 +184,7 @@ def build_inst_widget(base_url: str = INST_DATA_BASE) -> str:
       if(myReq !== reqSeq){ return; }  // 已被更新的請求取代，丟棄舊回應
       var rows = res.rows.filter(function(r){ return !(excludeEtf && isEtf(r.code)); });
       $("lchipAsof").textContent = res.date ? "｜資料截至 " + res.date : "";
+      showStale(res.date, res.gap);
       if(!rows.length){
         body.innerHTML = "<tr><td colspan='"+(3+cols.length)+"'>此條件下無資料</td></tr>";
         return;
