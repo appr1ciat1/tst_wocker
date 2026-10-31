@@ -570,3 +570,31 @@ def test_workflow_archives_every_strategy_and_commits_it():
     assert labels == ['guard', 'surge', 'surge_pro', 'v85']
     commit = next(s for s in steps if s.get('name') == 'Commit and push')
     assert 'git add archive' in commit['run']
+
+
+# ── 法人籌碼資料源停更（2026-10-14 起 fork 的 Actions 被 GitHub 停用，widget 默默顯示舊資料兩週）──
+def test_inst_source_watchdog_counts_missed_sessions():
+    import exchange_calendars as xcals
+    import tools.check_inst_source as W
+    cal = xcals.get_calendar('XTAI')
+    missed = W.missed_sessions('2026-10-14', '2026-10-31', cal)
+    assert len(missed) >= 10 and W.verdict(len(missed)) == 'error'
+    assert W.missed_sessions('2026-10-30', '2026-10-31', cal) == []          # 週五資料、週六檢查 → 正常
+    assert W.verdict(len(W.missed_sessions('2026-10-29', '2026-10-31', cal))) == 'warning'
+    assert W.data_date([{'date': '2026-10-14'}]) == '2026-10-14'
+    assert W.data_date({'date': '2026-10-14', 'windows': {}}) == '2026-10-14'
+
+
+def test_inst_widget_warns_when_data_is_stale():
+    from inst_widget import build_inst_widget
+    h = build_inst_widget()
+    assert 'id="lchipStale"' in h and 'showStale(res.date)' in h and 'n >= 2' in h
+
+
+def test_watchdog_workflow_is_separate_from_report_and_deploy():
+    import yaml
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.github', 'workflows')
+    wf = yaml.safe_load(open(os.path.join(base, 'watch_data_sources.yml'), encoding='utf-8'))
+    assert wf['permissions'] == {'contents': 'read'}
+    deploy = open(os.path.join(base, 'deploy_pages.yml'), encoding='utf-8').read()
+    assert 'Watch data sources' not in deploy
