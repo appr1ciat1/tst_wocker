@@ -136,11 +136,16 @@ def build_inst_widget(base_url: str = INST_DATA_BASE) -> str:
     }
     return n;
   }
-  function showStale(dateStr){
+  // gap：主力（分點）視窗內缺資料的交易日。分點是每日快照、事後無法回補，只能如實標出。
+  function showStale(dateStr, gap){
     var el = $("lchipStale"), n = dateStr ? staleWeekdays(dateStr) : 0;
     if(n >= 2){
       el.textContent = "⚠ 資料已停更：最新資料日 " + dateStr + "，之後約 " + n +
         " 個交易日沒有更新。排行並非最新，請勿依此判斷；資料源 tw-institutional-stocker 需要修復。";
+      el.hidden = false;
+    } else if(gap && gap.length){
+      el.textContent = "⚠ 此 " + win + " 日視窗缺 " + gap.length + " 個交易日的分點資料（" +
+        gap.join("、") + "），累計值只含有資料的日子，偏小。";
       el.hidden = false;
     } else { el.hidden = true; }
   }
@@ -155,7 +160,8 @@ def build_inst_widget(base_url: str = INST_DATA_BASE) -> str:
         var arr = (d.windows && d.windows[win]) ? d.windows[win].slice() : [];
         if(dir === "down"){ arr.reverse(); }
         arr = arr.filter(function(r){ return dir==="up" ? r.net_lots>0 : r.net_lots<0; });
-        return { rows: arr, date: d.date };
+        var meta = (d.window_meta && d.window_meta[win]) ? d.window_meta[win] : null;
+        return { rows: arr, date: d.date, gap: meta ? (meta.missing || []) : [] };
       });
     }
     var file = (cat === "three_inst_net")
@@ -178,7 +184,7 @@ def build_inst_widget(base_url: str = INST_DATA_BASE) -> str:
       if(myReq !== reqSeq){ return; }  // 已被更新的請求取代，丟棄舊回應
       var rows = res.rows.filter(function(r){ return !(excludeEtf && isEtf(r.code)); });
       $("lchipAsof").textContent = res.date ? "｜資料截至 " + res.date : "";
-      showStale(res.date);
+      showStale(res.date, res.gap);
       if(!rows.length){
         body.innerHTML = "<tr><td colspan='"+(3+cols.length)+"'>此條件下無資料</td></tr>";
         return;

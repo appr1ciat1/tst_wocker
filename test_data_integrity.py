@@ -588,7 +588,14 @@ def test_inst_source_watchdog_counts_missed_sessions():
 def test_inst_widget_warns_when_data_is_stale():
     from inst_widget import build_inst_widget
     h = build_inst_widget()
-    assert 'id="lchipStale"' in h and 'showStale(res.date)' in h and 'n >= 2' in h
+    assert 'id="lchipStale"' in h and 'showStale(res.date, res.gap)' in h and 'n >= 2' in h
+
+
+def test_inst_widget_flags_main_force_window_gaps():
+    # 分點資料無法回補：視窗內缺的交易日必須在畫面上標出，不可默默顯示偏小的累計值
+    from inst_widget import build_inst_widget
+    h = build_inst_widget()
+    assert 'd.window_meta' in h and 'meta.missing' in h and '分點資料' in h
 
 
 def test_watchdog_workflow_is_separate_from_report_and_deploy():
