@@ -59,12 +59,25 @@ def alert(msg, level='warning'):
 _BUY_ROW_RE = re.compile(r'<tr[^>]*>\s*<td>([^<]+)</td>((?:(?!</tr>).)*?)</tr>', re.DOTALL)
 
 
+# 報表「操作狀態」欄只顯示燈號（不寫中文），買單以 data-sig="buy" 標記。
+# 舊報表（git 歷史）用中文「建議買進」，解析時兩者皆認。
+BUY_MARKER = 'data-sig="buy"'
+CAND_MARKER = 'data-sig="cand"'
+LEGACY_BUY_LABEL = '建議買進'
+BUY_MARK_RE = r'(?:data-sig="buy"|建議買進)'
+
+
+def is_buy_row(body):
+    """報表一列（<tr> 內文）是否為買單：新格式 data-sig="buy" 或舊格式「建議買進」。"""
+    return BUY_MARKER in body or LEGACY_BUY_LABEL in body
+
+
 def report_buy_row_codes(html):
-    """stock_report.html 中所有標為「建議買進」的列的代號（不做格式過濾）。
+    """stock_report.html 中所有標為買單（data-sig="buy" / 舊版「建議買進」）的列的代號（不做格式過濾）。
 
     給 HTML 後援解析器對帳用：解析出的訊號數 < 這裡的數量 → 有訂單被靜默丟掉。
     """
-    return [code.strip() for code, body in _BUY_ROW_RE.findall(html) if '建議買進' in body]
+    return [code.strip() for code, body in _BUY_ROW_RE.findall(html) if is_buy_row(body)]
 
 
 _UNIVERSE_META_RE = re.compile(r'<meta name="tw-universe" content="([^"]*)"')

@@ -8,6 +8,7 @@
 
 全部離線執行：以假的 yf.download 取代網路。
 """
+import re
 import json
 import os
 from datetime import date, datetime, timezone
@@ -284,6 +285,44 @@ def test_paper_tracker_html_fallback_by_column(tmp_path, monkeypatch):
     sigs = paper_tracker.extract_signals_from_report()
     got = {s['ticker']: s['entry'] for s in sigs}
     assert got == {'3443': 8040.0, '00631L': 300.0}
+
+
+# 新格式：操作狀態只顯示燈號（不寫中文），買單以 data-sig="buy" 標記
+ROW_SIG = ROW.replace('<span>{status}</span>', '{status}')
+HTML_SIG = (
+    '<tr><td>6505</td><td>4.00</td><td>97.3</td>'
+    '<td><span data-sig="drop" style="color:#ff4444">⛔ #1</span></td>'
+    '<td><span>⚠️</span></td><td>x</td></tr>\n'
+    + ROW_SIG.format(c='3443', p='8040.0', tp='9246.0', sl='7396.8',
+                     status='<span data-sig="buy" style="color:#00ff00">🟢 #2</span>')
+    + ROW_SIG.format(c='00631L', p='300.0', tp='345.0', sl='276.0',
+                     status='<span data-sig="buy" style="color:#00ff00">🟢 #3</span>')
+    + '<tr style="opacity:0.6"><td>2330</td><td>3.10</td><td>1000.0</td>'
+      '<td><span data-sig="cand" style="color:#ffab00">🟡</span></td><td>-</td></tr>\n'
+    + '<tr style="opacity:0.4"><td>2317</td><td>3.00</td><td>200.0</td>'
+      '<td><span data-sig="watch" style="color:#aaaaaa">⚪</span></td><td>-</td></tr>\n')
+
+
+def test_signal_marker_format_parsed_by_all_consumers(tmp_path, monkeypatch):
+    import paper_trade
+    import paper_tracker
+    assert DQ.report_buy_row_codes(HTML_SIG) == ['3443', '00631L']
+    rows = paper_trade.extract_signal_rows(HTML_SIG)
+    assert [r[0] for r in rows] == ['3443', '00631L']
+    assert rows[0][1:4] == ('8040.0', '9246.0', '7396.8')
+    monkeypatch.chdir(tmp_path)
+    open('stock_report.html', 'w', encoding='utf-8').write(HTML_SIG)
+    sigs = paper_tracker.extract_signals_from_report()
+    assert {s['ticker']: s['entry'] for s in sigs} == {'3443': 8040.0, '00631L': 300.0}
+
+
+def test_ai_report_status_cells_have_no_chinese():
+    """操作狀態欄只放燈號：ai_report.py 的 status 字串不得含中文（法律疑慮）。"""
+    src = open(os.path.join(os.path.dirname(__file__), 'ai_report.py'), encoding='utf-8').read()
+    lines = [l for l in src.splitlines() if l.strip().startswith('status = ') and '<span' in l]
+    assert len(lines) == 4
+    for l in lines:
+        assert not re.search(r'[一-鿿]', l), l
 
 
 # ── #11 Yahoo 連結 ───────────────────────────────────────────────

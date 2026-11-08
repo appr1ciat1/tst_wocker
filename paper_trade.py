@@ -43,7 +43,9 @@ from strategy.risk_metrics import (
 )
 from strategy.portfolio_vol_target import PortfolioVolatilityTarget, VolTargetConfig
 from strategy.core_holdings import CoreHoldingsManager, get_default_core
-from strategy.data_quality import alert, filter_codes_by_report_universe, reconcile_parsed_signals
+from strategy.data_quality import (
+    BUY_MARK_RE, alert, filter_codes_by_report_universe, reconcile_parsed_signals,
+)
 
 TRADE_LOG = 'paper_trades.json'
 SIGNAL_LOG = 'paper_signals.json'
@@ -131,21 +133,21 @@ def extract_signal_rows(html):
     import re
 
     # _ROW = 「不跨越 </tr> 的任意字元」。舊寫法用 .*?（DOTALL）會從一列一路匹配到
-    # 下一列的「建議買進」，把 A 股的代號配上 B 股的停利停損。
+    # 下一列的買單標記，把 A 股的代號配上 B 股的停利停損。
     _ROW = r'(?:(?!</tr>).)*?'
     current_pattern = (
         r'<tr[^>]*>\s*'
         r'<td>(\d{4,6}[A-Z]?)</td>\s*'
         r'<td>[\d\.]+</td>\s*'
         r'<td>([\d\.]+)</td>\s*'
-        r'<td>' + _ROW + r'建議買進' + _ROW + r'</td>\s*'
+        r'<td>' + _ROW + BUY_MARK_RE + _ROW + r'</td>\s*'
         r'<td>' + _ROW + r'停利' + _ROW + r'<span[^>]*>([\d\.]+)</span>' + _ROW +
         r'停損' + _ROW + r'<span[^>]*>([\d\.]+)</span>' + _ROW +
         r'最晚出場' + _ROW + r'(\d{4}-\d{2}-\d{2})'
     )
     matches = re.findall(current_pattern, html, re.DOTALL)
     if matches:
-        # 對帳：HTML 中標為「建議買進」的列，必須全部被解析到，否則發警告
+        # 對帳：HTML 中標為買單（data-sig="buy" / 舊版「建議買進」）的列，必須全部被解析到，否則發警告
         reconcile_parsed_signals(html, [m[0] for m in matches])
         return filter_codes_by_report_universe(html, matches, code_of=lambda m: m[0])
 

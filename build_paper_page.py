@@ -339,6 +339,12 @@ def two_month(spro_eq, spro_trades):
     return stats, rows
 
 
+def _light_only(label):
+    """訊號表只顯示燈號（避免法律疑慮，不寫中文）：「🔴 停損」→「🔴」。無燈號時回傳 "-"。"""
+    head = str(label or "").strip().split(" ", 1)[0]
+    return head if head and not any("\u4e00" <= ch <= "\u9fff" for ch in head) else "-"
+
+
 def recent_sells(spro_trades, n_days=7):
     """SURGE PRO 近 n_days 的出場（賣出訊號）。"""
     if spro_trades is None or spro_trades.empty or "Exit_Date" not in spro_trades.columns:
@@ -417,23 +423,23 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
         buy_html = ("<table><tr><th>股票</th><th>參考進場</th><th>停利</th><th>停損</th><th>執行日</th></tr>"
                     f"{buy_rows}</table>")
     else:
-        buy_html = "<p style='color:#94a3b8'>今日無新買進訊號。</p>"
+        buy_html = "<p style='color:#94a3b8'>🟢 -</p>"
     # 賣出訊號（近 7 日出場）
     if sells:
         sell_rows = "".join(
             f"<tr><td>{_stock_link(s['ticker'])}</td><td>{s['exit_d']}</td><td>{s['exit_p']}</td>"
             f"<td style='color:{'#4ade80' if s['ret']>0 else '#f87171'}'>{s['ret']*100:+.1f}%</td>"
-            f"<td>{s['reason']}</td></tr>" for s in sells[:20]
+            f"<td>{_light_only(s['reason'])}</td></tr>" for s in sells[:20]
         )
         sell_html = ("<table><tr><th>股票</th><th>出場日</th><th>出場價</th><th>損益</th><th>原因</th></tr>"
                      f"{sell_rows}</table>")
     else:
-        sell_html = "<p style='color:#94a3b8'>近 7 日無出場。</p>"
+        sell_html = "<p style='color:#94a3b8'>🔴 -</p>"
     sig_html = (
-        f"<p style='color:#94a3b8'>買進來源：{os.path.basename(sig_file or '（無）')}（{t_disp} 次一交易日進場計畫）。"
-        "賣出＝近 7 日 TP/SL/時間到期出場。股票可點擊跳 Yahoo Finance。</p>"
-        f"<h3 style='font-size:.98rem;margin:6px 0 4px;color:{t_color}'>🟢 買進訊號</h3>{buy_html}"
-        f"<h3 style='font-size:.98rem;margin:14px 0 4px;color:#93c5fd'>🔴 賣出訊號</h3>{sell_html}"
+        f"<p style='color:#94a3b8'>🟢 來源：{os.path.basename(sig_file or '（無）')}（{t_disp} 次一交易日計畫）。"
+        "🔴＝近 7 日 TP/SL/時間到期出場。股票可點擊跳 Yahoo Finance。</p>"
+        f"<h3 style='font-size:.98rem;margin:6px 0 4px;color:{t_color}'>🟢</h3>{buy_html}"
+        f"<h3 style='font-size:.98rem;margin:14px 0 4px;color:#93c5fd'>🔴</h3>{sell_html}"
     )
     # SURGE PRO 過去兩個月
     if tm_stats:
@@ -496,7 +502,7 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
             "（<b>含當時已持有續抱者</b>）→ 反映「持續看好度」。</td></tr>"
             "<tr><td class='nk'>分輪 / 排序</td><td>每 <b>10 個台股交易日</b>為一輪、共 3 輪，最新一輪在前；"
             "每輪只列 <b>≥2 次</b>的標的，依次數由多到少。</td></tr>"
-            "<tr><td class='nk'>⚠️ 與上方差異</td><td>「今日買賣訊號」是<b>新買進</b>（已排除持倉），"
+            "<tr><td class='nk'>⚠️ 與上方差異</td><td>「今日訊號」是<b>新買進</b>（已排除持倉），"
             "故當日新入選的股票在此僅 1 天、可能不在 ≥2 名單——兩者衡量不同，非矛盾。</td></tr>"
             "</tbody></table>"
             f"{round_blocks}"
@@ -556,7 +562,7 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
 <html lang="zh-TW"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Paper Trading · {t_disp} — {today}</title>
-<meta name="description" content="{t_disp} 策略 paper trading：當日買賣訊號、過去兩個月績效、四策略比較。法人資料來源：appr1ciat1/tw-institutional-stocker。">
+<meta name="description" content="{t_disp} 策略 paper trading：當日訊號、過去兩個月績效、四策略比較。法人資料來源：appr1ciat1/tw-institutional-stocker。">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
  body{{font-family:system-ui,"Noto Sans TC",sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:28px 16px}}
@@ -578,7 +584,7 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
  table.note td.nk{{color:#93c5fd;font-weight:700;white-space:nowrap;width:1%;vertical-align:top;background:#132033}}
 </style></head><body><div class="wrap">
  <h1>📈 Paper Trading · <span style="color:{t_color}">{t_disp}</span> <span style="font-size:1rem;color:#94a3b8">（{t_role}）</span></h1>
- <p class="sub">追蹤 <b style="color:{t_color}">{t_disp}</b> 策略的當日買賣訊號與近兩個月績效，附四策略全期權益曲線比較。每個台股交易日收盤後自動更新。資料：{today}。
+ <p class="sub">追蹤 <b style="color:{t_color}">{t_disp}</b> 策略的當日訊號與近兩個月績效，附四策略全期權益曲線比較。每個台股交易日收盤後自動更新。資料：{today}。
  <br>另有：<a href="paper_trading.html">SURGE PRO paper</a> · <a href="paper_trading_guard.html">GUARD paper</a> · <a href="index.html">策略選單</a></p>
 
  <div class="card">
@@ -600,7 +606,7 @@ def build_html(results, sig_file, signals, sells, tm_stats, tm_trades, buy_round
  <h2>📌 選哪個策略？（依市場情境）</h2>
  <div class="card">{guide_html}</div>
 
- <h2>📋 今日買賣訊號（{t_disp}）</h2>
+ <h2>📋 今日訊號（{t_disp}）</h2>
  <div class="card">{sig_html}</div>
 
  {inst_widget_html}

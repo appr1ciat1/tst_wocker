@@ -35,8 +35,8 @@ from strategy.portfolio_vol_target import (
 from strategy.risk_metrics import compute_tiered_risk_summary, format_tiered_risk_summary
 from strategy.core_holdings import CoreHoldingsManager
 from strategy.data_quality import (
-    alert, filter_codes_by_report_universe, filter_orders_by_universe, is_valid_tw_code,
-    reconcile_parsed_signals,
+    alert, filter_codes_by_report_universe, filter_orders_by_universe, is_buy_row,
+    is_valid_tw_code, reconcile_parsed_signals,
 )
 
 DATA_FILE = 'paper_equity.json'
@@ -354,12 +354,12 @@ def extract_signals_from_report(run_day=None):
     with open(report_path) as f:
         html = f.read()
 
-    # Format: <td>TICKER</td><td>SCORE</td><td>ENTRY</td><td>...建議買進...</td>
+    # Format: <td>TICKER</td><td>SCORE</td><td>ENTRY</td><td>...data-sig="buy"（舊版：建議買進）...</td>
     #         <td>停利: TP ... 停損: SL ...</td>
     signals = []
     rows = re.findall(r'<tr>(.*?)</tr>', html, re.DOTALL)
     for row in rows:
-        if '建議買進' not in row:
+        if not is_buy_row(row):
             continue
         # 依欄位位置解析（0=代號, 1=分數, 2=價格），不再用「第幾個數字」推位置：
         # 帶字母的代號（如 00631L）不是純數字，舊寫法會讓價格欄位錯位。

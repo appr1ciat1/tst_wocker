@@ -24,7 +24,8 @@ import pandas as pd
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from strategy.data_quality import (  # noqa: E402
-    expected_latest_session, is_session_closed, is_valid_tw_code,
+    CAND_MARKER, expected_latest_session, is_buy_row, is_session_closed,
+    is_valid_tw_code,
 )
 
 
@@ -36,11 +37,12 @@ def parse_report(page):
     m = re.search(r'報表日期: ([0-9-]+)', page)
     rows = []
     for code, body in re.findall(r'<tr><td>([^<]{2,12})</td>(.*?)</tr>', page, re.DOTALL):
-        if '建議買進' not in body and '候選' not in body:
+        is_buy = is_buy_row(body)
+        if not is_buy and '候選' not in body and CAND_MARKER not in body:
             continue
         cells = re.findall(r'<td>(.*?)</td>', body, re.DOTALL)
         tp = re.search(r'停利:</b> <span[^>]*>[\d.]+</span> \(\+([\d.]+)%\)', body)
-        rows.append({'code': code.strip(), 'buy': '建議買進' in body,
+        rows.append({'code': code.strip(), 'buy': is_buy,
                      'price': cells[1] if len(cells) > 1 else None,
                      'tp_pct': float(tp.group(1)) if tp else None})
     return (m.group(1) if m else None), rows

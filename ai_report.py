@@ -513,10 +513,11 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
                     f'<br><b>最晚出場:</b> {time_exit}')
 
         if order_valid:
-            status = f'<span style="color:#00ff00; font-weight:bold;">🟢 建議買進 #{rank}</span>'
+            # 操作狀態只顯示燈號（避免法律疑慮，不寫中文）；data-sig 給下游解析器辨識買單
+            status = f'<span data-sig="buy" style="color:#00ff00; font-weight:bold;">🟢 #{rank}</span>'
         else:
-            # 不可寫「建議買進」：paper 的 HTML 後援解析會把它當成買單
-            status = f'<span style="color:#ff4444; font-weight:bold;">⛔ 已剔除 #{rank}</span>'
+            # 不可帶 data-sig="buy"：paper 的 HTML 後援解析會把它當成買單
+            status = f'<span data-sig="drop" style="color:#ff4444; font-weight:bold;">⛔ #{rank}</span>'
 
         # Per-stock 歷史績效
         ss = stock_stats.get(ticker, None)
@@ -575,7 +576,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 
     # 顯示未被選入的候選（排名 > Top-K）
     for ticker, score, price in not_selected[:5]:
-        status = '<span style="color:#ffab00">🟡 候選 (超出 Top-K)</span>'
+        status = '<span data-sig="cand" style="color:#ffab00">🟡</span>'
         ss = stock_stats.get(ticker, None)
         hist_badge = '<span style="font-size:0.72rem; color:#555;">-</span>'
         if ss and ss['trades'] >= 2:
@@ -600,7 +601,7 @@ def generate_report(trades_df, equity_df, total_score, close_df, config,
 
     # 顯示被過濾掉的（前 5 筆）
     for ticker, score, price, reason in filtered_out[:5]:
-        status = f'<span style="color:#aaaaaa">⚪ 觀望 ({reason})</span>'
+        status = '<span data-sig="watch" style="color:#aaaaaa">⚪</span>'
         price_str = f'{price:.1f}' if not pd.isna(price) else '-'
         inst_badge = '<td style="color:#555">-</td><td style="color:#555">-</td>'
         trading_plan_rows += (
