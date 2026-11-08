@@ -3,3 +3,4 @@ pandas
 numpy
 matplotlib
 exchange_calendars
+cryptography>=42  # tools/encrypt_pages.py（Pages 密碼鎖）

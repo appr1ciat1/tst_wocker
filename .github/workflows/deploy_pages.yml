@@ -16,6 +16,7 @@ on:
       - 'index.html'
       - '.nojekyll'
       - '.github/workflows/deploy_pages.yml'
+      - 'tools/encrypt_pages.py'
   workflow_dispatch:
   workflow_run:
     workflows: ['AI Quant Trading Report v9']
@@ -56,6 +57,7 @@ jobs:
             report_surge_pro.html
             chart_surge_pro.png
             .nojekyll
+            tools/encrypt_pages.py
           sparse-checkout-cone-mode: false
 
       - name: Prepare static site
@@ -75,6 +77,23 @@ jobs:
           cp .nojekyll _site/ 2>/dev/null || touch _site/.nojekyll
           echo "Site files:"
           ls -lh _site/
+
+      # 密碼鎖：所有 HTML 以 AES-256-GCM 加密，瀏覽器輸入密碼後才在本機解密。
+      # 密碼放在 repo secret PAGE_PASSWORD；未設定時此步驟失敗、不部署明文頁。
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Encrypt pages（密碼鎖）
+        env:
+          PAGE_PASSWORD: ${{ secrets.PAGE_PASSWORD }}
+        run: |
+          pip install --quiet cryptography
+          python tools/encrypt_pages.py _site
+          # 部署前檢查：加密後不得殘留明文訊號
+          if grep -l 'data-sig=\|停利\|AI 台股' _site/*.html; then
+            echo "::error::加密後仍找到明文內容，中止部署"; exit 1
+          fi
 
       - name: Push to gh-pages（單一扁平 commit，force 覆蓋）
         env:
