@@ -1,5 +1,7 @@
 # TW Stocker — v8.5 約束優化四策略（v8.5 / GUARD / SURGE / SURGE PRO）
 
+> **【免責聲明】**本專案僅供學術研究與程式技術分享之用，不構成任何投資操作建議。任何人因複製、修改或執行本程式碼而造成的任何形式損失，作者不承擔任何法律與經濟責任。投資有風險，策略回測表現不代表未來獲利。
+
 固定純 **v8.5 橫向動量**為唯一 baseline，在「**相對 v8.5**」的硬約束下
 （MDD 不深於 baseline + 3pp、逐年 OOS Sharpe 不低於 baseline、PBO < 0.5、交易數不因過度濾網崩掉）
 做 **constrained parameter search + regime-aware sizing**，產出三個正式優化策略 + 純 v8.5 基準。
